@@ -1,0 +1,24 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace SmartData.GPT.Tokenizer
+{
+    internal abstract class BaseTokenizer
+    {
+        public abstract IEnumerable<string> Tokenize(string text);
+        protected IEnumerable<string> WhitespaceTokenize(string text)
+        {
+            string strippedText = text.Trim();
+            if (string.IsNullOrEmpty(strippedText))
+            {
+                return new List<string>();
+            }
+
+            IEnumerable<string> tokens = text.Split(' ');
+            return tokens;
+        }
+    }
+}

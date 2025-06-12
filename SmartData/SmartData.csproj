@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="GPT\Chat\Model\mobilebert_squad11_int8_qdq_89.4f1.onnx" />
+    <None Remove="GPT\Embedder\Model\model.onnx" />
+    <None Remove="GPT\Embedder\Model\vocab.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="GPT\Chat\Model\mobilebert_squad11_int8_qdq_89.4f1.onnx" />
+    <EmbeddedResource Include="GPT\Embedder\Model\model.onnx" />
+    <EmbeddedResource Include="GPT\Embedder\Model\vocab.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FaissNet" Version="1.1.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.6" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.6" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.6" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.6" />
+    <PackageReference Include="Microsoft.ML" Version="4.0.2" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.0" />
+    <PackageReference Include="Microsoft.ML.OnnxTransformer" Version="4.0.2" />
+    <PackageReference Include="System.ComponentModel.Annotations" Version="5.0.0" />
+  </ItemGroup>
+
+</Project>
