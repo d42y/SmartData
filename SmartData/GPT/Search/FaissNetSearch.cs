@@ -1,153 +1,198 @@
 ﻿using FaissNet;
+using Microsoft.Extensions.Logging;
 
-public class FaissNetSearch : IDisposable
+namespace SmartData.GPT.Search
 {
-    private readonly Dictionary<string, FaissNet.Index> _indices;
-    private readonly Dictionary<string, Dictionary<long, Guid>> _idToText;
-    private readonly Dictionary<string, long> _nextIds;
-    private readonly int _dimension;
-    private bool _disposed;
-    private readonly object _lock = new();
-
-    public FaissNetSearch(int dimension = 384) // Default for all-MiniLM-L6-v2
+    public class FaissNetSearch : IDisposable
     {
-        _dimension = dimension;
-        _indices = new Dictionary<string, FaissNet.Index>();
-        _idToText = new Dictionary<string, Dictionary<long, Guid>>();
-        _nextIds = new Dictionary<string, long>();
-    }
+        private readonly FaissNet.Index _index;
+        private readonly Dictionary<long, Guid> _idToEmbeddingId;
+        private long _nextId;
+        private readonly int _dimension;
+        private readonly ILogger _logger;
+        private bool _disposed;
+        private readonly object _lock = new();
 
-    public void AddEmbedding(string databaseId, Guid textId, float[] embedding)
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(FaissNetSearch));
-
-        if (string.IsNullOrEmpty(databaseId))
-            throw new ArgumentNullException(nameof(databaseId));
-
-        if (embedding.Length != _dimension)
-            throw new ArgumentException($"Embedding dimension must be {_dimension}.", nameof(embedding));
-
-        lock (_lock)
+        public FaissNetSearch(int dimension = 384, ILogger logger = null)
         {
-            EnsureDatabase(databaseId);
-
-            var index = _indices[databaseId];
-            var idToText = _idToText[databaseId];
-            var nextId = _nextIds[databaseId];
-
-            long faissId = nextId++;
-            index.AddWithIds(new[] { embedding }, new[] { faissId });
-            idToText[faissId] = textId;
-
-            _nextIds[databaseId] = nextId;
+            _dimension = dimension;
+            _logger = logger;
+            _index = FaissNet.Index.CreateDefault(_dimension, MetricType.METRIC_L2); // NEW: Use FlatL2
+            _idToEmbeddingId = new Dictionary<long, Guid>();
+            _nextId = 0;
+            _logger?.LogDebug("Initialized FaissNetSearch with dimension {Dimension} and index type FlatL2", _dimension);
         }
-    }
 
-    public void UpdateEmbedding(string databaseId, Guid textId, float[] embedding)
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(FaissNetSearch));
-
-        lock (_lock)
+        // NEW: Removed Train method as FlatL2 does not require training
+        // Retained for potential future use with other index types
+        public void Train(IEnumerable<float[]> embeddings)
         {
-            EnsureDatabase(databaseId);
-
-            var index = _indices[databaseId];
-            var idToText = _idToText[databaseId];
-
-            var existingId = idToText.FirstOrDefault(kvp => kvp.Value == textId).Key;
-            if (idToText.ContainsKey(existingId))
+            if (_disposed)
             {
-                index.RemoveIds(new[] { existingId });
-                idToText.Remove(existingId);
+                _logger?.LogError("Attempted to train index after disposal");
+                throw new ObjectDisposedException(nameof(FaissNetSearch));
             }
 
-            AddEmbedding(databaseId, textId, embedding);
-        }
-    }
-
-    public void RemoveEmbedding(string databaseId, Guid textId)
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(FaissNetSearch));
-
-        lock (_lock)
-        {
-            if (!_indices.ContainsKey(databaseId))
-                return;
-
-            var index = _indices[databaseId];
-            var idToText = _idToText[databaseId];
-
-            var id = idToText.FirstOrDefault(kvp => kvp.Value == textId).Key;
-            if (idToText.ContainsKey(id))
-            {
-                index.RemoveIds(new[] { id });
-                idToText.Remove(id);
-            }
-        }
-    }
-
-    public Guid[] Search(string databaseId, float[] queryEmbedding, int k = 1)
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(FaissNetSearch));
-
-        if (string.IsNullOrEmpty(databaseId))
-            throw new ArgumentNullException(nameof(databaseId));
-
-        if (queryEmbedding.Length != _dimension)
-            throw new ArgumentException($"Query embedding dimension must be {_dimension}.", nameof(queryEmbedding));
-
-        lock (_lock)
-        {
-            if (!_indices.ContainsKey(databaseId))
-                return Array.Empty<Guid>();
-
-            var index = _indices[databaseId];
-            var idToText = _idToText[databaseId];
-
-            var (distances, ids) = index.SearchFlat(queryEmbedding.Length, queryEmbedding, k);
-            var results = new List<Guid>();
-
-            for (int i = 0; i < ids.Length; i++)
-            {
-                if (idToText.TryGetValue(ids[i], out var text))
-                {
-                    results.Add(text);
-                }
-            }
-
-            return results.ToArray();
-        }
-    }
-
-    private void EnsureDatabase(string databaseId)
-    {
-        if (!_indices.ContainsKey(databaseId))
-        {
-            _indices[databaseId] = FaissNet.Index.Create(_dimension, "IVF256,Flat", MetricType.METRIC_L2);
-            _idToText[databaseId] = new Dictionary<long, Guid>();
-            _nextIds[databaseId] = 0;
-        }
-    }
-
-    public void Dispose()
-    {
-        if (!_disposed)
-        {
             lock (_lock)
             {
-                foreach (var index in _indices.Values)
-                {
-                    index?.Dispose();
-                }
-                _indices.Clear();
-                _idToText.Clear();
-                _nextIds.Clear();
+                _logger?.LogDebug("Training not required for FlatL2 index, skipping");
             }
-            _disposed = true;
+        }
+
+        public void AddEmbedding(Guid embeddingId, float[] embedding)
+        {
+            if (_disposed)
+            {
+                _logger?.LogError("Attempted to add embedding after disposal");
+                throw new ObjectDisposedException(nameof(FaissNetSearch));
+            }
+
+            if (embedding == null || embedding.Length != _dimension)
+            {
+                _logger?.LogError("Invalid embedding: Length {Length}, Expected {Dimension}", embedding?.Length ?? 0, _dimension);
+                throw new ArgumentException($"Embedding dimension must be {_dimension}.", nameof(embedding));
+            }
+
+            lock (_lock)
+            {
+                long faissId = _nextId++;
+                try
+                {
+                    _index.AddWithIds(new[] { embedding }, new[] { faissId });
+                    _idToEmbeddingId[faissId] = embeddingId;
+                    _logger?.LogDebug("Added embedding for EmbeddingId {EmbeddingId} with FaissId {FaissId}", embeddingId, faissId);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Failed to add embedding for EmbeddingId {EmbeddingId}", embeddingId);
+                    throw;
+                }
+            }
+        }
+
+        public void UpdateEmbedding(Guid embeddingId, float[] embedding)
+        {
+            if (_disposed)
+            {
+                _logger?.LogError("Attempted to update embedding after disposal");
+                throw new ObjectDisposedException(nameof(FaissNetSearch));
+            }
+
+            lock (_lock)
+            {
+                var existingId = _idToEmbeddingId.FirstOrDefault(kvp => kvp.Value == embeddingId).Key;
+                if (_idToEmbeddingId.ContainsKey(existingId))
+                {
+                    try
+                    {
+                        _index.RemoveIds(new[] { existingId });
+                        _idToEmbeddingId.Remove(existingId);
+                        _logger?.LogDebug("Removed old embedding for EmbeddingId {EmbeddingId} with FaissId {FaissId}", embeddingId, existingId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogError(ex, "Failed to remove old embedding for EmbeddingId {EmbeddingId}", embeddingId);
+                        throw;
+                    }
+                }
+
+                AddEmbedding(embeddingId, embedding);
+            }
+        }
+
+        public void RemoveEmbedding(Guid embeddingId)
+        {
+            if (_disposed)
+            {
+                _logger?.LogError("Attempted to remove embedding after disposal");
+                throw new ObjectDisposedException(nameof(FaissNetSearch));
+            }
+
+            lock (_lock)
+            {
+                var id = _idToEmbeddingId.FirstOrDefault(kvp => kvp.Value == embeddingId).Key;
+                if (_idToEmbeddingId.ContainsKey(id))
+                {
+                    try
+                    {
+                        _index.RemoveIds(new[] { id });
+                        _idToEmbeddingId.Remove(id);
+                        _logger?.LogDebug("Removed embedding for EmbeddingId {EmbeddingId} with FaissId {FaissId}", embeddingId, id);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogError(ex, "Failed to remove embedding for EmbeddingId {EmbeddingId}", embeddingId);
+                        throw;
+                    }
+                }
+            }
+        }
+
+        public Guid[] Search(float[] queryEmbedding, int k = 1)
+        {
+            if (_disposed)
+            {
+                _logger?.LogError("Attempted to search after disposal");
+                throw new ObjectDisposedException(nameof(FaissNetSearch));
+            }
+
+            if (queryEmbedding == null || queryEmbedding.Length != _dimension)
+            {
+                _logger?.LogError("Invalid query embedding: Length {Length}, Expected {Dimension}", queryEmbedding?.Length ?? 0, _dimension);
+                throw new ArgumentException($"Query embedding dimension must be {_dimension}.", nameof(queryEmbedding));
+            }
+
+            lock (_lock)
+            {
+                if (_idToEmbeddingId.Count == 0)
+                {
+                    _logger?.LogWarning("Search attempted on empty index, returning empty results");
+                    return Array.Empty<Guid>();
+                }
+
+                try
+                {
+                    var (distances, ids) = _index.SearchFlat(queryEmbedding.Length, queryEmbedding, k);
+                    var results = new List<Guid>();
+
+                    for (int i = 0; i < ids.Length; i++)
+                    {
+                        if (_idToEmbeddingId.TryGetValue(ids[i], out var entityId))
+                        {
+                            results.Add(entityId);
+                        }
+                    }
+
+                    _logger?.LogDebug("Search returned {Count} results for topK={TopK}", results.Count, k);
+                    return results.ToArray();
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Failed to perform search with topK={TopK}", k);
+                    throw;
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                lock (_lock)
+                {
+                    try
+                    {
+                        _index?.Dispose();
+                        _idToEmbeddingId.Clear();
+                        _logger?.LogDebug("Disposed FaissNetSearch");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogError(ex, "Error during disposal");
+                    }
+                    _disposed = true;
+                }
+            }
         }
     }
 }

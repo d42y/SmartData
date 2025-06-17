@@ -21,16 +21,7 @@ namespace SmartData.GPT.Embedder
         private readonly RunOptions _runOptions;
         private bool disposedValue;
 
-        // Singleton instance
-        private static readonly Lazy<AllMiniLmL6V2Embedder> _instance = new Lazy<AllMiniLmL6V2Embedder>(() => new AllMiniLmL6V2Embedder(), isThreadSafe: true);
-
-        /// <summary>
-        /// Gets the singleton instance of AllMiniLmL6V2Embedder.
-        /// </summary>
-        public static AllMiniLmL6V2Embedder Instance => _instance.Value;
-
-        // Private constructor to prevent direct instantiation
-        private AllMiniLmL6V2Embedder()
+        public AllMiniLmL6V2Embedder()
         {
             _tokenizer = new BertTokenizer();
             _inferenceSession = LoadModelFromResource();

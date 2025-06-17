@@ -1,0 +1,5 @@
+﻿DROP DATABASE SmartDataDemo;
+
+dotnet ef migrations add InitialCreate --output-dir Migrations
+
+dotnet ef database update

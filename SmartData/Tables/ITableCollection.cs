@@ -12,8 +12,10 @@ namespace SmartData.Tables
         Task<T> InsertAsync(T entity);
         Task InsertAsync(IEnumerable<T> entities);
         Task<bool> UpdateAsync(T entity);
+        Task<T> UpsertAsync(T entity);
         Task<bool> DeleteAsync(object id);
         Task<int> DeleteAllAsync();
+        Task<bool> ExistsAsync(object id);
         Task<T?> FindByIdAsync(object id);
         Task<List<T>> FindAsync(Expression<Func<T, bool>> predicate, int skip = 0, int limit = int.MaxValue);
         Task<List<T>> FindAllAsync();
@@ -22,5 +24,8 @@ namespace SmartData.Tables
         Task AddOrUpdateEmbeddingAsync(T entity, float[] embedding);
         Task<float[]?> GetEmbeddingAsync(object entityId);
         Task<bool> RemoveEmbeddingAsync(object entityId);
+
+        Task<List<TimeseriesData>> GetTimeseriesAsync(string entityId, string propertyName, DateTime startTime, DateTime endTime);
+        Task<List<TimeseriesData>> GetInterpolatedTimeseriesAsync(string entityId, string propertyName, DateTime startTime, DateTime endTime, TimeSpan interval, InterpolationMethod method);
     }
 }

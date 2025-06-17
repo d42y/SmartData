@@ -1,9 +1,8 @@
-﻿namespace d42y.SmartData.GPT.Chat
+﻿namespace SmartData.GPT.Chat
 {
     using Microsoft.ML.Data;
 
-    public partial class MobileBertMiniLMChat
-    {
+    
         // Output schema for MobileBERT (question answering)
         public class OnnxOutput
         {
@@ -13,5 +12,5 @@
             [ColumnName("end_logits")]
             public float[] EndLogits { get; set; }
         }
-    }
+    
 }

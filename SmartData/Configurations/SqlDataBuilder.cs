@@ -1,10 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace SmartData.Configurations
 {
@@ -14,6 +9,8 @@ namespace SmartData.Configurations
         public string MigrationsAssembly { get; set; }
         public Action<DbContextOptionsBuilder> OptionsBuilder { get; set; }
         public ILoggerFactory LoggerFactory { get; set; }
+        public bool EmbeddingEnabled { get; private set; } // Embedding toggle
+        public bool TimeseriesEnabled { get; private set; } // Timeseries toggle
 
         public SqlDataBuilder WithConnectionString(string connectionString)
         {
@@ -36,6 +33,20 @@ namespace SmartData.Configurations
         public SqlDataBuilder WithLogging(ILoggerFactory loggerFactory)
         {
             LoggerFactory = loggerFactory;
+            return this;
+        }
+
+        // Enable embedding feature
+        public SqlDataBuilder EnableEmbedding()
+        {
+            EmbeddingEnabled = true;
+            return this;
+        }
+
+        // Enable timeseries feature
+        public SqlDataBuilder EnableTimeseries()
+        {
+            TimeseriesEnabled = true;
             return this;
         }
     }

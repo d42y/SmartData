@@ -1,9 +1,8 @@
-﻿namespace d42y.SmartData.GPT.Chat
+﻿namespace SmartData.GPT.Chat
 {
     using Microsoft.ML.Data;
 
-    public partial class MobileBertMiniLMChat
-    {
+    
         // Input schema for MobileBERT
         public class OnnxInput
         {
@@ -16,5 +15,5 @@
             [ColumnName("token_type_ids")]
             public long[] TokenTypeIds { get; set; }
         }
-    }
+    
 }
