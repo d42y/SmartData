@@ -17,6 +17,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DemoEmbedding", "DemoEmbedd
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DemoIoT", "DemoIoT\DemoIoT.csproj", "{993AE17C-B6FE-485C-A40F-254EA96E7521}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartData.UnitTests", "SmartData.UnitTests\SmartData.UnitTests.csproj", "{47902F45-08FB-427C-B32F-BE977EF68AC1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -51,6 +53,10 @@ Global
 		{993AE17C-B6FE-485C-A40F-254EA96E7521}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{993AE17C-B6FE-485C-A40F-254EA96E7521}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{993AE17C-B6FE-485C-A40F-254EA96E7521}.Release|Any CPU.Build.0 = Release|Any CPU
+		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

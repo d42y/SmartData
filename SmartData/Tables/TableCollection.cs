@@ -33,14 +33,16 @@ namespace SmartData.Tables
         private readonly bool _integrityVerificationEnabled; // NEW
         private readonly FaissNetSearch _faissIndex;
 
+        private readonly EmbeddableAttribute _classEmbeddableAttribute; // NEW: Store class-level attribute
+
         public TableCollection(IServiceProvider serviceProvider, string tableName, bool embeddingEnabled, bool timeseriesEnabled, IEmbedder embedder = null, FaissNetSearch faissIndex = null, ILogger logger = null)
         {
             _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
             _tableName = tableName ?? throw new ArgumentNullException(nameof(tableName));
             _embeddingEnabled = embeddingEnabled;
             _timeseriesEnabled = timeseriesEnabled;
-            _changeTrackingEnabled = serviceProvider.GetRequiredService<SmartDataOptions>().ChangeTrackingEnabled; // NEW
-            _integrityVerificationEnabled = serviceProvider.GetRequiredService<SmartDataOptions>().IntegrityVerificationEnabled; // NEW
+            _changeTrackingEnabled = serviceProvider.GetRequiredService<SmartDataOptions>().ChangeTrackingEnabled;
+            _integrityVerificationEnabled = serviceProvider.GetRequiredService<SmartDataOptions>().IntegrityVerificationEnabled;
             _embedder = embeddingEnabled ? embedder ?? throw new ArgumentNullException(nameof(embedder)) : null;
             _faissIndex = embeddingEnabled ? faissIndex ?? throw new ArgumentNullException(nameof(faissIndex)) : null;
             _logger = logger;
@@ -54,16 +56,17 @@ namespace SmartData.Tables
                 .OrderBy(x => x.Attribute.Priority)
                 .Select(x => (x.Property, x.Attribute))
                 .ToList() : new List<(PropertyInfo, EmbeddableAttribute)>();
+            _classEmbeddableAttribute = embeddingEnabled ? typeof(T).GetCustomAttribute<EmbeddableAttribute>() : null; // NEW: Get class-level attribute
             _trackChangeProperties = _changeTrackingEnabled ? typeof(T).GetProperties()
                 .Select(p => new { Property = p, Attribute = p.GetCustomAttribute<TrackChangeAttribute>() })
                 .Where(x => x.Attribute != null)
                 .Select(x => (x.Property, x.Attribute))
-                .ToList() : new List<(PropertyInfo, TrackChangeAttribute)>(); // NEW
+                .ToList() : new List<(PropertyInfo, TrackChangeAttribute)>();
             _ensureIntegrityProperties = _integrityVerificationEnabled ? typeof(T).GetProperties()
                 .Select(p => new { Property = p, Attribute = p.GetCustomAttribute<EnsureIntegrityAttribute>() })
                 .Where(x => x.Attribute != null)
                 .Select(x => (x.Property, x.Attribute))
-                .ToList() : new List<(PropertyInfo, EnsureIntegrityAttribute)>(); // CHANGED
+                .ToList() : new List<(PropertyInfo, EnsureIntegrityAttribute)>();
             _timeseriesProperties = timeseriesEnabled ? typeof(T).GetProperties()
                 .Where(p => p.GetCustomAttribute<TimeseriesAttribute>() != null)
                 .ToList() : new List<PropertyInfo>();
@@ -212,6 +215,77 @@ namespace SmartData.Tables
             return entity;
         }
 
+        public async Task<List<T>> UpsertAsync(IEnumerable<T> entities)
+        {
+            if (entities == null || !entities.Any()) throw new ArgumentException("Entities cannot be null or empty.", nameof(entities));
+
+            using var scope = _serviceProvider.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<SmartDataContext>();
+            var dbSet = dbContext.Set<T>();
+            var updatedEntities = new List<T>();
+
+            // Batch fetch existing entities
+            var entityIds = entities.Select(e => _idProperty.GetValue(e)?.ToString())
+                .Where(id => !string.IsNullOrEmpty(id))
+                .ToList();
+            if (!entityIds.Any()) throw new InvalidOperationException("All entities must have non-null IDs.");
+
+            var existingEntities = await dbSet
+                .Where(e => entityIds.Contains(EF.Property<string>(e, _idProperty.Name)))
+                .ToDictionaryAsync(e => _idProperty.GetValue(e)?.ToString(), e => e);
+
+            using var transaction = await dbContext.Database.BeginTransactionAsync();
+
+            try
+            {
+                foreach (var entity in entities)
+                {
+                    var id = _idProperty.GetValue(entity)?.ToString()
+                        ?? throw new InvalidOperationException($"Entity ID cannot be null for entity in {_tableName}");
+
+                    if (existingEntities.TryGetValue(id, out var existing))
+                    {
+                        var originalEntity = existing;
+                        dbContext.Entry(existing).CurrentValues.SetValues(entity);
+
+                        if (_changeTrackingEnabled)
+                            await LogChangesAsync(entity, originalEntity, "Update", dbContext);
+
+                        if (_integrityVerificationEnabled)
+                            await EnsureIntegrityAsync(new[] { originalEntity }, dbContext);
+
+                        updatedEntities.Add(entity);
+                    }
+                    else
+                    {
+                        await dbSet.AddAsync(entity);
+
+                        if (_changeTrackingEnabled)
+                            await LogChangesAsync(entity, null, "Insert", dbContext);
+
+                        if (_integrityVerificationEnabled)
+                            await LogIntegrityAsync(entity, dbContext);
+
+                        updatedEntities.Add(entity);
+                    }
+
+                    if (_embeddingEnabled) await GenerateAndStoreEmbeddingAsync(entity);
+                    if (_timeseriesEnabled) await StoreTimeseriesAsync(entity);
+                }
+
+                await dbContext.SaveChangesAsync();
+                await transaction.CommitAsync();
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                _logger?.LogError(ex, "Failed to upsert entities in table {TableName}", _tableName);
+                throw new InvalidOperationException($"Failed to upsert entities in {_tableName}: {ex.Message}", ex);
+            }
+
+            return updatedEntities;
+        }
+
         public async Task<bool> DeleteAsync(object id)
         {
             using var scope = _serviceProvider.CreateScope();
@@ -337,7 +411,7 @@ namespace SmartData.Tables
         }
 
         #region Embedding
-        private async Task GenerateAndStoreEmbeddingAsync(T entity)
+        public async Task GenerateAndStoreEmbeddingAsync(T entity)
         {
             if (!_embeddingEnabled) return;
 
@@ -345,7 +419,7 @@ namespace SmartData.Tables
             var dbContext = scope.ServiceProvider.GetRequiredService<SmartDataContext>();
             var entityId = _idProperty.GetValue(entity)?.ToString()
                 ?? throw new InvalidOperationException("Entity ID cannot be null.");
-            var paragraph = GenerateParagraph(entity, dbContext);
+            var paragraph = await GenerateParagraph(entity, dbContext);
             if (string.IsNullOrEmpty(paragraph)) return;
 
             var embedding = _embedder.GenerateEmbedding(paragraph).ToArray();
@@ -358,18 +432,19 @@ namespace SmartData.Tables
             _logger?.LogDebug("Generated embedding for entity {EntityId} with length {Length}", entityId, embedding.Length);
         }
 
-        private string? GenerateParagraph(T entity, SmartDataContext dbContext)
+        private async Task<string?> GenerateParagraph(T entity, SmartDataContext dbContext)
         {
-            if (!_embeddingEnabled || !_embeddableProperties.Any()) return null;
+            if (!_embeddingEnabled || (!_embeddableProperties.Any() && _classEmbeddableAttribute == null)) return null;
 
             var sb = new StringBuilder();
             var properties = typeof(T).GetProperties().ToDictionary(p => p.Name, p => p, StringComparer.OrdinalIgnoreCase);
 
-            foreach (var (property, attr) in _embeddableProperties)
+            // Process property-level embeddings
+            foreach (var (property, attr) in _embeddableProperties.OrderBy(x => x.Attribute.Priority))
             {
                 try
                 {
-                    var formatted = FormatWithNamedPlaceholders(attr.Format, entity, properties);
+                    var formatted = await FormatWithNamedPlaceholders(attr.Format, entity, properties, dbContext);
                     if (!string.IsNullOrEmpty(formatted))
                     {
                         sb.Append(formatted + " ");
@@ -381,10 +456,27 @@ namespace SmartData.Tables
                 }
             }
 
+            // Process class-level embedding
+            if (_classEmbeddableAttribute != null)
+            {
+                try
+                {
+                    var formatted = await FormatWithNamedPlaceholders(_classEmbeddableAttribute.Format, entity, properties, dbContext);
+                    if (!string.IsNullOrEmpty(formatted))
+                    {
+                        sb.Append(formatted + " ");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to format class-level Embeddable attribute for type {TypeName} with format {Format}", typeof(T).Name, _classEmbeddableAttribute.Format);
+                }
+            }
+
             return sb.Length > 0 ? sb.ToString().Trim() : null;
         }
 
-        private string FormatWithNamedPlaceholders(string format, T entity, Dictionary<string, PropertyInfo> properties)
+        private async Task<string> FormatWithNamedPlaceholders(string format, T entity, Dictionary<string, PropertyInfo> properties, SmartDataContext dbContext)
         {
             if (string.IsNullOrEmpty(format)) return string.Empty;
 
@@ -392,19 +484,152 @@ namespace SmartData.Tables
             var matches = System.Text.RegularExpressions.Regex.Matches(format, @"\{([^{}]+)\}");
             foreach (System.Text.RegularExpressions.Match match in matches)
             {
-                var propertyName = match.Groups[1].Value;
-                if (properties.TryGetValue(propertyName, out var property))
+                var placeholder = match.Groups[1].Value;
+                string value = string.Empty;
+
+                // Handle aggregate functions (e.g., {Products.MAX(Price)})
+                if (placeholder.Contains(".") && placeholder.Contains("("))
                 {
-                    var value = property.GetValue(entity)?.ToString() ?? string.Empty;
-                    result = result.Replace($"{{{propertyName}}}", value);
+                    var parts = placeholder.Split(new[] { '.', '(' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 3 && parts[2].EndsWith(")"))
+                    {
+                        var navPropertyName = parts[0];
+                        var aggregateFunction = parts[1];
+                        var targetProperty = parts[2].TrimEnd(')');
+
+                        if (properties.TryGetValue(navPropertyName, out var navProperty))
+                        {
+                            value = await ComputeAggregateAsync(entity, navProperty, aggregateFunction, targetProperty, dbContext);
+                        }
+                    }
+                }
+                // Handle navigation properties (e.g., {Customer.Name})
+                else if (placeholder.Contains("."))
+                {
+                    var parts = placeholder.Split('.');
+                    if (parts.Length == 2 && properties.TryGetValue(parts[0], out var navProperty))
+                    {
+                        value = await GetNavigationPropertyValueAsync(entity, navProperty, parts[1], dbContext);
+                    }
+                }
+                // Handle direct properties
+                else if (properties.TryGetValue(placeholder, out var property))
+                {
+                    value = property.GetValue(entity)?.ToString() ?? string.Empty;
                 }
                 else
                 {
-                    _logger?.LogWarning("Property {PropertyName} not found in type {TypeName} for format string {Format}", propertyName, typeof(T).Name, format);
+                    _logger?.LogWarning("Property or navigation {Placeholder} not found in type {TypeName} for format string {Format}", placeholder, typeof(T).Name, format);
                 }
+
+                result = result.Replace($"{{{placeholder}}}", value);
             }
 
             return result;
+        }
+
+        private async Task<string> GetNavigationPropertyValueAsync(T entity, PropertyInfo navProperty, string targetProperty, SmartDataContext dbContext)
+        {
+            var navValue = navProperty.GetValue(entity);
+            if (navValue == null) return string.Empty;
+
+            // Handle single navigation property (e.g., Customer.Name)
+            var navType = navProperty.PropertyType;
+            var targetProp = navType.GetProperty(targetProperty, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (targetProp != null)
+            {
+                return targetProp.GetValue(navValue)?.ToString() ?? string.Empty;
+            }
+
+            // Handle collection navigation property (e.g., Customer.Products)
+            if (typeof(System.Collections.IEnumerable).IsAssignableFrom(navType) && navType != typeof(string))
+            {
+                var elementType = navType.GetGenericArguments().FirstOrDefault() ?? navType.GetElementType();
+                if (elementType != null)
+                {
+                    targetProp = elementType.GetProperty(targetProperty, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                    if (targetProp != null)
+                    {
+                        var values = ((System.Collections.IEnumerable)navValue).Cast<object>()
+                            .Select(item => targetProp.GetValue(item)?.ToString() ?? string.Empty)
+                            .Where(s => !string.IsNullOrEmpty(s));
+                        return string.Join(", ", values);
+                    }
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private async Task<string> ComputeAggregateAsync(T entity, PropertyInfo navProperty, string aggregateFunction, string targetProperty, SmartDataContext dbContext)
+        {
+            var navType = navProperty.PropertyType;
+            if (!typeof(System.Collections.IEnumerable).IsAssignableFrom(navType) || navType == typeof(string)) return string.Empty;
+
+            var elementType = navType.GetGenericArguments().FirstOrDefault() ?? navType.GetElementType();
+            if (elementType == null) return string.Empty;
+
+            var targetProp = elementType.GetProperty(targetProperty, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (targetProp == null) return string.Empty;
+
+            var entityId = _idProperty.GetValue(entity)?.ToString();
+            if (string.IsNullOrEmpty(entityId)) return string.Empty;
+
+            // Dynamically query the related collection
+            var queryMethod = typeof(DbContext).GetMethod(nameof(DbContext.Set), Type.EmptyTypes).MakeGenericMethod(elementType);
+            var query = (IQueryable)queryMethod.Invoke(dbContext, null);
+
+            // Filter by foreign key (assume <Entity>Id convention, e.g., CustomerId)
+            var foreignKeyProp = elementType.GetProperty($"{typeof(T).Name}Id", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (foreignKeyProp == null) return string.Empty;
+
+            var parameter = Expression.Parameter(elementType, "e");
+            var propertyAccess = Expression.Property(parameter, foreignKeyProp);
+            var constant = Expression.Constant(entityId);
+            var equal = Expression.Equal(propertyAccess, constant);
+            var lambda = Expression.Lambda(equal, parameter);
+            var whereMethod = typeof(Queryable).GetMethods()
+                .First(m => m.Name == nameof(Queryable.Where) && m.GetParameters().Length == 2)
+                .MakeGenericMethod(elementType);
+            query = (IQueryable)whereMethod.Invoke(null, new object[] { query, lambda });
+
+            // Compute aggregate
+            var propType = targetProp.PropertyType;
+            object? result = aggregateFunction.ToUpper() switch
+            {
+                "MAX" => await ComputeMaxAsync(query, targetProp, propType),
+                "MIN" => await ComputeMinAsync(query, targetProp, propType),
+                "COUNT" => await query.Cast<object>().CountAsync(),
+                _ => null
+            };
+
+            return result?.ToString() ?? string.Empty;
+        }
+
+        private async Task<object> ComputeMaxAsync(IQueryable query, PropertyInfo targetProp, Type propType)
+        {
+            var parameter = Expression.Parameter(query.ElementType, "e");
+            var propertyAccess = Expression.Property(parameter, targetProp);
+            var lambda = Expression.Lambda(propertyAccess, parameter);
+            var maxMethod = typeof(Queryable).GetMethods()
+                .First(m => m.Name == nameof(Queryable.Max) && m.GetParameters().Length == 2)
+                .MakeGenericMethod(query.ElementType, propType);
+            var task = (Task)maxMethod.Invoke(null, new object[] { query, lambda });
+            await task;
+            return task.GetType().GetProperty("Result")?.GetValue(task);
+        }
+
+        private async Task<object> ComputeMinAsync(IQueryable query, PropertyInfo targetProp, Type propType)
+        {
+            var parameter = Expression.Parameter(query.ElementType, "e");
+            var propertyAccess = Expression.Property(parameter, targetProp);
+            var lambda = Expression.Lambda(propertyAccess, parameter);
+            var minMethod = typeof(Queryable).GetMethods()
+                .First(m => m.Name == nameof(Queryable.Min) && m.GetParameters().Length == 2)
+                .MakeGenericMethod(query.ElementType, propType);
+            var task = (Task)minMethod.Invoke(null, new object[] { query, lambda });
+            await task;
+            return task.GetType().GetProperty("Result")?.GetValue(task);
         }
 
         public async Task<Guid> AddOrUpdateEmbeddingAsync(T entity, float[] embedding)
@@ -698,7 +923,30 @@ namespace SmartData.Tables
                           oldEntity != null ? _idProperty.GetValue(oldEntity)?.ToString() : null;
             if (string.IsNullOrEmpty(entityId)) return;
 
-            var changeBy = "System"; // Placeholder: Replace with authenticated user if available
+            string changeBy;
+            var connectionString = dbContext.Database.GetConnectionString();
+            if (connectionString.Contains("Integrated Security=True", StringComparison.OrdinalIgnoreCase))
+            {
+                changeBy = System.Security.Principal.WindowsIdentity.GetCurrent().Name;
+            }
+            else
+            {
+                try
+                {
+                    changeBy = await dbContext.Database.ExecuteSqlRawAsync("SELECT CURRENT_USER") switch
+                    {
+                        var result when result > 0 => await dbContext.Set<object>().FromSqlRaw("SELECT CURRENT_USER").Select(x => x.ToString()).FirstOrDefaultAsync() ?? "Unknown",
+                        _ => "Unknown"
+                    };
+                }
+                catch
+                {
+                    changeBy = connectionString.Split(';')
+                        .FirstOrDefault(x => x.StartsWith("User ID=", StringComparison.OrdinalIgnoreCase))?
+                        .Split('=')[1] ?? "System";
+                }
+            }
+
             var changeDate = DateTime.UtcNow;
 
             foreach (var (property, _) in _trackChangeProperties)
@@ -719,7 +967,8 @@ namespace SmartData.Tables
                         ChangeDate = changeDate,
                         OriginalData = originalValue != null ? JsonSerializer.Serialize(originalValue) : null,
                         NewData = newValue != null ? JsonSerializer.Serialize(newValue) : null,
-                        ChangeType = changeType
+                        ChangeType = changeType,
+                        PropertyName = property.Name
                     };
 
                     await dbContext.Set<ChangeLogRecord>().AddAsync(changeLog);

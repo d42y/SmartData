@@ -7,6 +7,8 @@ namespace SmartData.Configurations
     {
         public string ConnectionString { get; set; }
         public string MigrationsAssembly { get; set; }
+        public bool SmartCalcEnabled { get; private set; }
+
         public Action<DbContextOptionsBuilder> OptionsBuilder { get; set; }
         public ILoggerFactory LoggerFactory { get; set; }
         public bool EmbeddingEnabled { get; private set; }
@@ -61,5 +63,12 @@ namespace SmartData.Configurations
             IntegrityVerificationEnabled = true;
             return this;
         }
+
+        public SqlDataBuilder EnableSmartCalc()
+        {
+            SmartCalcEnabled = true;
+            return this;
+        }
+
     }
 }

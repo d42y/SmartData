@@ -46,7 +46,8 @@ namespace SmartData.Extensions
                 EmbeddingEnabled = builder.EmbeddingEnabled,
                 TimeseriesEnabled = builder.TimeseriesEnabled,
                 ChangeTrackingEnabled = builder.ChangeTrackingEnabled,
-                IntegrityVerificationEnabled = builder.IntegrityVerificationEnabled
+                IntegrityVerificationEnabled = builder.IntegrityVerificationEnabled,
+                SmartCalcEnabled = builder.SmartCalcEnabled
             });
 
             services.AddScoped<FaissNetSearch>(sp =>

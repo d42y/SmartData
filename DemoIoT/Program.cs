@@ -45,7 +45,7 @@ namespace DemoIoT
                 var sqlData = scope.ServiceProvider.GetRequiredService<SqlData>();
                 var dbContext = scope.ServiceProvider.GetRequiredService<SmartDataContext>();
                 var appDbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
+                
                 // Ensure schema is created
                 await sqlData.MigrateAsync();
 

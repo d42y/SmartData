@@ -2,6 +2,7 @@
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SmartData.Attributes;
+using SmartData.SmartCalc.Models;
 using SmartData.Tables.Models;
 using System.Collections.Concurrent;
 using System.ComponentModel.DataAnnotations;
@@ -120,6 +121,37 @@ namespace SmartData.Configurations
                     entity.Property(e => e.PreviousHash).HasMaxLength(64);
                     entity.Property(e => e.Timestamp).IsRequired();
                     entity.HasIndex(e => new { e.TableName, e.EntityId, e.PropertyName, e.Timestamp });
+                });
+            }
+
+            if (_options.SmartCalcEnabled)
+            {
+                modelBuilder.Entity<Calculation>(entity =>
+                {
+                    entity.ToTable("sysCalculations");
+                    entity.HasKey(e => e.Id);
+                    entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
+                    entity.Property(e => e.Value).HasMaxLength(4000);
+                    entity.Property(e => e.Interval);
+                    entity.Property(e => e.LastRun);
+                    entity.Property(e => e.Embeddable);
+                    entity.HasIndex(e => e.Name).IsUnique();
+                });
+
+                modelBuilder.Entity<CalculationStep>(entity =>
+                {
+                    entity.ToTable("sysCalculationSteps");
+                    entity.HasKey(e => e.Id);
+                    entity.Property(e => e.CalculationId).IsRequired();
+                    entity.Property(e => e.StepOrder).IsRequired();
+                    entity.Property(e => e.OperationType).IsRequired().HasMaxLength(50);
+                    entity.Property(e => e.Expression).IsRequired().HasMaxLength(1000);
+                    entity.Property(e => e.ResultVariable).HasMaxLength(100);
+                    entity.HasIndex(e => new { e.CalculationId, e.StepOrder });
+                    entity.HasOne<Calculation>()
+                        .WithMany()
+                        .HasForeignKey(e => e.CalculationId)
+                        .OnDelete(DeleteBehavior.Cascade);
                 });
             }
 
