@@ -9,8 +9,10 @@ namespace SmartData.Configurations
         public string MigrationsAssembly { get; set; }
         public Action<DbContextOptionsBuilder> OptionsBuilder { get; set; }
         public ILoggerFactory LoggerFactory { get; set; }
-        public bool EmbeddingEnabled { get; private set; } // Embedding toggle
-        public bool TimeseriesEnabled { get; private set; } // Timeseries toggle
+        public bool EmbeddingEnabled { get; private set; }
+        public bool TimeseriesEnabled { get; private set; }
+        public bool ChangeTrackingEnabled { get; private set; } // NEW: Change tracking toggle
+        public bool IntegrityVerificationEnabled { get; private set; } // NEW: Integrity verification toggle
 
         public SqlDataBuilder WithConnectionString(string connectionString)
         {
@@ -36,17 +38,27 @@ namespace SmartData.Configurations
             return this;
         }
 
-        // Enable embedding feature
         public SqlDataBuilder EnableEmbedding()
         {
             EmbeddingEnabled = true;
             return this;
         }
 
-        // Enable timeseries feature
         public SqlDataBuilder EnableTimeseries()
         {
             TimeseriesEnabled = true;
+            return this;
+        }
+
+        public SqlDataBuilder EnableChangeTracking()
+        {
+            ChangeTrackingEnabled = true;
+            return this;
+        }
+
+        public SqlDataBuilder EnableIntegrityVerification()
+        {
+            IntegrityVerificationEnabled = true;
             return this;
         }
     }

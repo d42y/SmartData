@@ -22,7 +22,7 @@ namespace DemoEmbedding
             _logger = logger;
         }
 
-        public async Task<string> ChatAsync<T>(string query, DataSet<T> dataSet, int topK = 1) where T : class
+        public async Task<string> ChatAsync<T>(string query, SdSet<T> dataSet, int topK = 1) where T : class
         {
             if (string.IsNullOrEmpty(query))
             {

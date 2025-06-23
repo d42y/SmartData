@@ -1,6 +1,6 @@
-﻿namespace SmartData.Tables
+﻿namespace SmartData
 {
-    public class TimeseriesData
+    public class TimeseriesResult
     {
         public DateTime Timestamp { get; set; }
         public string Value { get; set; }

@@ -1,12 +1,11 @@
 ﻿using SmartData.Configurations;
-using SmartData.Tables;
 
 namespace SmartData.Extensions
 {
-    public static class DataSetExtensions
+    public static class SdSetExtensions
     {
-        public static async Task<List<TimeseriesData>> GetTimeseriesAsync<T>(
-            this DataSet<T> dataSet,
+        public static async Task<List<TimeseriesResult>> GetTimeseriesAsync<T>(
+            this SdSet<T> dataSet,
             string entityId,
             string propertyName,
             DateTime startTime,

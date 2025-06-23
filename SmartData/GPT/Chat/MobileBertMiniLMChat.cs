@@ -92,7 +92,7 @@ namespace SmartData.GPT.Chat
             using (var scope = _serviceProvider.CreateScope())
             {
                 var dbContext = scope.ServiceProvider.GetRequiredService<SmartDataContext>();
-                var dataSet = new DataSet<object>(_sqlData, _serviceProvider, _faissIndex, _tableName); // NEW: Pass _serviceProvider
+                var dataSet = new SdSet<object>(_sqlData, _serviceProvider, _faissIndex, _tableName); // NEW: Pass _serviceProvider
                 foreach (var contextId in retrievedContextIds)
                 {
                     var entity = await dataSet.FindByIdAsync(contextId.ToString());

@@ -2,12 +2,10 @@
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SmartData.Attributes;
-using SmartData.Extensions;
-using SmartData.Tables;
+using SmartData.Tables.Models;
 using System.Collections.Concurrent;
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
-using System.Threading.Tasks;
 
 namespace SmartData.Configurations
 {
@@ -90,6 +88,41 @@ namespace SmartData.Configurations
                 });
             }
 
+            // NEW: Configure sysChangeLog if ChangeTrackingEnabled
+            if (_options.ChangeTrackingEnabled)
+            {
+                modelBuilder.Entity<ChangeLogRecord>(entity =>
+                {
+                    entity.ToTable("sysChangeLog");
+                    entity.HasKey(e => e.Id);
+                    entity.Property(e => e.TableName).IsRequired().HasMaxLength(255);
+                    entity.Property(e => e.EntityId).IsRequired().HasMaxLength(128);
+                    entity.Property(e => e.ChangeBy).IsRequired().HasMaxLength(100);
+                    entity.Property(e => e.ChangeDate).IsRequired();
+                    entity.Property(e => e.OriginalData).HasMaxLength(4000);
+                    entity.Property(e => e.NewData).HasMaxLength(4000);
+                    entity.Property(e => e.ChangeType).IsRequired().HasMaxLength(50);
+                    entity.HasIndex(e => new { e.TableName, e.EntityId, e.ChangeDate });
+                });
+            }
+
+            // NEW: Configure sysIntegrityLog if IntegrityVerificationEnabled
+            if (_options.IntegrityVerificationEnabled)
+            {
+                modelBuilder.Entity<IntegrityLogRecord>(entity =>
+                {
+                    entity.ToTable("sysIntegrityLog");
+                    entity.HasKey(e => e.Id);
+                    entity.Property(e => e.TableName).IsRequired().HasMaxLength(255);
+                    entity.Property(e => e.EntityId).IsRequired().HasMaxLength(128);
+                    entity.Property(e => e.PropertyName).IsRequired().HasMaxLength(128);
+                    entity.Property(e => e.DataHash).IsRequired().HasMaxLength(64); // SHA-256 hash
+                    entity.Property(e => e.PreviousHash).HasMaxLength(64);
+                    entity.Property(e => e.Timestamp).IsRequired();
+                    entity.HasIndex(e => new { e.TableName, e.EntityId, e.PropertyName, e.Timestamp });
+                });
+            }
+
             foreach (var (entityType, tableName) in _entityTypes)
             {
                 var entityBuilder = modelBuilder.Entity(entityType);
@@ -136,10 +169,9 @@ namespace SmartData.Configurations
             base.OnConfiguring(optionsBuilder);
         }
 
-        // NEW: Ensure database schema is created automatically
         public async Task EnsureSchemaCreatedAsync()
         {
-            if (_options.EmbeddingEnabled || _options.TimeseriesEnabled || _entityTypes.Any())
+            if (_options.EmbeddingEnabled || _options.TimeseriesEnabled || _options.ChangeTrackingEnabled || _options.IntegrityVerificationEnabled || _entityTypes.Any())
             {
                 await Database.EnsureCreatedAsync();
             }

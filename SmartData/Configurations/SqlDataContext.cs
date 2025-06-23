@@ -16,7 +16,7 @@ namespace SmartData.Configurations
                 throw new ArgumentNullException(nameof(manager));
 
             var properties = GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Where(p => p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == typeof(DataSet<>));
+                .Where(p => p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == typeof(SdSet<>));
 
             foreach (var prop in properties)
             {
@@ -31,7 +31,7 @@ namespace SmartData.Configurations
                 var table = registerMethod.Invoke(manager, new object[] { tableName });
 
                 // Create DataSet<T> with correct constructor parameters
-                var dataSetType = typeof(DataSet<>).MakeGenericType(entityType);
+                var dataSetType = typeof(SdSet<>).MakeGenericType(entityType);
                 var faissIndex = manager.FaissIndex; // NEW: Get FaissNetSearch from SqlData
                 try
                 {

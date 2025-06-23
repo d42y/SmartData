@@ -44,7 +44,9 @@ namespace SmartData.Extensions
             services.AddSingleton<SmartDataOptions>(sp => new SmartDataOptions
             {
                 EmbeddingEnabled = builder.EmbeddingEnabled,
-                TimeseriesEnabled = builder.TimeseriesEnabled
+                TimeseriesEnabled = builder.TimeseriesEnabled,
+                ChangeTrackingEnabled = builder.ChangeTrackingEnabled,
+                IntegrityVerificationEnabled = builder.IntegrityVerificationEnabled
             });
 
             services.AddScoped<FaissNetSearch>(sp =>

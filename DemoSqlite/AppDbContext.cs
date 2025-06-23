@@ -6,8 +6,8 @@ namespace DemoSqlite
 {
     public class AppDbContext : SqlDataContext
     {
-        public DataSet<Product> Products { get; set; }
-        public DataSet<Customer> Customers { get; set; }
+        public SdSet<Product> Products { get; set; }
+        public SdSet<Customer> Customers { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

@@ -21,11 +21,11 @@ namespace SmartData.Tables
         Task<List<T>> FindAllAsync();
         Task<long> CountAsync(Expression<Func<T, bool>> predicate = null);
         Task<List<T>> ExecuteSqlQueryAsync(string sql, params object[] parameters);
-        Task AddOrUpdateEmbeddingAsync(T entity, float[] embedding);
+        Task<Guid> AddOrUpdateEmbeddingAsync(T entity, float[] embedding);
         Task<float[]?> GetEmbeddingAsync(object entityId);
         Task<bool> RemoveEmbeddingAsync(object entityId);
 
-        Task<List<TimeseriesData>> GetTimeseriesAsync(string entityId, string propertyName, DateTime startTime, DateTime endTime);
-        Task<List<TimeseriesData>> GetInterpolatedTimeseriesAsync(string entityId, string propertyName, DateTime startTime, DateTime endTime, TimeSpan interval, InterpolationMethod method);
+        Task<List<TimeseriesResult>> GetTimeseriesAsync(string entityId, string propertyName, DateTime startTime, DateTime endTime);
+        Task<List<TimeseriesResult>> GetInterpolatedTimeseriesAsync(string entityId, string propertyName, DateTime startTime, DateTime endTime, TimeSpan interval, InterpolationMethod method);
     }
 }

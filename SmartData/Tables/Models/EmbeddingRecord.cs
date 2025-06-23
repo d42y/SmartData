@@ -1,4 +1,4 @@
-﻿namespace SmartData.Tables
+﻿namespace SmartData.Tables.Models
 {
     public class EmbeddingRecord
     {

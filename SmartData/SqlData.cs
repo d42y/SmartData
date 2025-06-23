@@ -5,6 +5,7 @@ using SmartData.Configurations;
 using SmartData.GPT.Embedder;
 using SmartData.GPT.Search;
 using SmartData.Tables;
+using SmartData.Tables.Models;
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 

@@ -1,4 +1,4 @@
-﻿namespace SmartData.Tables
+﻿namespace SmartData.Tables.Models
 {
     public class TsDeltaT
     {
@@ -46,7 +46,7 @@
                 uint value = (uint)Math.Abs(delta);
                 while (value >= 128)
                 {
-                    writer.Write((byte)((value & 127) | 128));
+                    writer.Write((byte)(value & 127 | 128));
                     value >>= 7;
                 }
                 writer.Write((byte)value);

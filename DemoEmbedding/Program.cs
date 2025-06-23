@@ -75,7 +75,7 @@ namespace DemoEmbedding
 
             // Search embeddings directly
             Console.WriteLine("\nSearching embeddings directly...");
-            var matches = await sensors.SearchEmbeddings("What is the current temperature of sensor3?", topK: 2);
+            var matches = await sensors.SearchEmbeddings("sensor3?", topK: 2);
             foreach (var result in matches)
             {
                 var entityId = result.GetValue<string>("Id"); // Sensor.Id is string

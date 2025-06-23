@@ -3,18 +3,19 @@ using Microsoft.Extensions.DependencyInjection;
 using SmartData.GPT.Embedder;
 using SmartData.GPT.Search;
 using SmartData.Tables;
+using SmartData.Tables.Models;
 using System.Linq.Expressions;
 
 namespace SmartData.Configurations
 {
-    public class DataSet<T> : IDisposable where T : class
+    public class SdSet<T> : IDisposable where T : class
     {
         private readonly SqlData _sqlData;
         private readonly ITableCollection<T> _table;
         private readonly IServiceProvider _serviceProvider;
         private readonly FaissNetSearch _faissIndex; // NEW: Store FaissNetSearch instance
 
-        public DataSet(SqlData sqlData, IServiceProvider serviceProvider, FaissNetSearch faissIndex, string tableName)
+        public SdSet(SqlData sqlData, IServiceProvider serviceProvider, FaissNetSearch faissIndex, string tableName)
         {
             _sqlData = sqlData ?? throw new ArgumentNullException(nameof(sqlData));
             _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
@@ -37,9 +38,9 @@ namespace SmartData.Configurations
             => await _table.CountAsync(predicate);
         public async Task<List<T>> ExecuteSqlQueryAsync(string sql, params object[] parameters)
             => await _table.ExecuteSqlQueryAsync(sql, parameters);
-        public async Task<List<TimeseriesData>> GetTimeseriesAsync(string entityId, string propertyName, DateTime startTime, DateTime endTime)
+        public async Task<List<TimeseriesResult>> GetTimeseriesAsync(string entityId, string propertyName, DateTime startTime, DateTime endTime)
             => await _table.GetTimeseriesAsync(entityId, propertyName, startTime, endTime);
-        public async Task<List<TimeseriesData>> GetInterpolatedTimeseriesAsync(string entityId, string propertyName, DateTime startTime, DateTime endTime, TimeSpan interval, InterpolationMethod method)
+        public async Task<List<TimeseriesResult>> GetInterpolatedTimeseriesAsync(string entityId, string propertyName, DateTime startTime, DateTime endTime, TimeSpan interval, InterpolationMethod method)
             => await _table.GetInterpolatedTimeseriesAsync(entityId, propertyName, startTime, endTime, interval, method);
 
         public async Task<List<QueryResult>> SearchEmbeddings(string query, int topK = 1)

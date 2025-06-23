@@ -20,7 +20,7 @@ namespace DemoTimeseries
     public class AppDbContext : SqlDataContext
     {
 
-        public DataSet<Sensor> Sensors { get; private set; }
+        public SdSet<Sensor> Sensors { get; private set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
