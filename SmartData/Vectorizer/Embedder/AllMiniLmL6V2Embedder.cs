@@ -1,11 +1,8 @@
 ﻿using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
 using SmartData.Vectorizer.Extensions;
 using SmartData.Vectorizer.Tokenizer;
+using System.Reflection;
 
 namespace SmartData.Vectorizer.Embedder
 {

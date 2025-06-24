@@ -1,8 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using System;
-using System.Reflection;
 using Microsoft.Extensions.Logging;
+using System.Reflection;
 
 namespace SmartData.Configurations
 {

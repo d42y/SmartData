@@ -1,7 +1,7 @@
 ﻿namespace SmartData.Vectorizer.Tokenizer
 {
-    using System.Reflection;
     using System.IO;
+    using System.Reflection;
     using System.Text.RegularExpressions;
 
     public class BertTokenizer : ITokenizer

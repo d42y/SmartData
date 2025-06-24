@@ -38,7 +38,7 @@ namespace SmartData
             InitializeDatabaseAndFaissIndex().GetAwaiter().GetResult();
             context.ConfigureTables(this, serviceProvider, logger);
             _logger?.LogDebug("Initialized SqlData with FaissNetSearch instance {InstanceId}", _faissIndex.GetHashCode());
-        
+
         }
 
         private async Task InitializeDatabaseAndFaissIndex()
@@ -74,7 +74,7 @@ namespace SmartData
                     _logger?.LogInformation("No embeddings found in sysEmbeddings, index remains empty");
                 }
             }
-            catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 1)
+            catch (Exception ex)
             {
                 _logger?.LogWarning(ex, "sysEmbeddings table not found during initialization. Assuming new database.");
                 // Table may be newly created; no embeddings to load

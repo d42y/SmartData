@@ -1,10 +1,5 @@
 ﻿using Microsoft.ML.OnnxRuntime.Tensors;
 using SmartData.Vectorizer.Extensions;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace SmartData.Vectorizer.Extensions
 {

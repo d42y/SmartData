@@ -6,7 +6,7 @@
         public string Format { get; init; }
         public int Priority { get; init; }
 
-        
+
         public EmbeddableAttribute(string format, int priority = 0)
         {
             if ((string.IsNullOrWhiteSpace(format) || string.IsNullOrEmpty(format)) && string.IsNullOrEmpty(Format))
