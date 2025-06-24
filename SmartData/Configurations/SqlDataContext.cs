@@ -30,7 +30,7 @@ namespace SmartData.Configurations
 
                 // Create DataSet<T> with correct constructor parameters
                 var dataSetType = typeof(SdSet<>).MakeGenericType(entityType);
-                var faissIndex = manager.FaissIndex; // NEW: Get FaissNetSearch from SqlData
+                var faissIndex = manager.FaissIndex; // Get FaissNetSearch from SqlData
                 try
                 {
                     var dataSet = Activator.CreateInstance(dataSetType, manager, serviceProvider, faissIndex, tableName)

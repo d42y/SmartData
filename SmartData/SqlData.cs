@@ -109,7 +109,7 @@ namespace SmartData
             using var scope = _serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<SmartDataContext>();
 
-            // NEW: Only apply migrations if assembly is specified
+            // Only apply migrations if assembly is specified
             if (!string.IsNullOrEmpty(_migrationsAssembly))
             {
                 var appliedMigrations = await dbContext.Database.GetAppliedMigrationsAsync();

@@ -29,11 +29,11 @@ namespace SmartData.Tables
         private readonly IEmbedder _embedder;
         private readonly bool _embeddingEnabled;
         private readonly bool _timeseriesEnabled;
-        private readonly bool _changeTrackingEnabled; // NEW
-        private readonly bool _integrityVerificationEnabled; // NEW
+        private readonly bool _changeTrackingEnabled; 
+        private readonly bool _integrityVerificationEnabled; 
         private readonly FaissNetSearch _faissIndex;
 
-        private readonly EmbeddableAttribute _classEmbeddableAttribute; // NEW: Store class-level attribute
+        private readonly EmbeddableAttribute _classEmbeddableAttribute; 
 
         public TableCollection(IServiceProvider serviceProvider, string tableName, bool embeddingEnabled, bool timeseriesEnabled, IEmbedder embedder = null, FaissNetSearch faissIndex = null, ILogger logger = null)
         {
@@ -56,7 +56,7 @@ namespace SmartData.Tables
                 .OrderBy(x => x.Attribute.Priority)
                 .Select(x => (x.Property, x.Attribute))
                 .ToList() : new List<(PropertyInfo, EmbeddableAttribute)>();
-            _classEmbeddableAttribute = embeddingEnabled ? typeof(T).GetCustomAttribute<EmbeddableAttribute>() : null; // NEW: Get class-level attribute
+            _classEmbeddableAttribute = embeddingEnabled ? typeof(T).GetCustomAttribute<EmbeddableAttribute>() : null; // Get class-level attribute
             _trackChangeProperties = _changeTrackingEnabled ? typeof(T).GetProperties()
                 .Select(p => new { Property = p, Attribute = p.GetCustomAttribute<TrackChangeAttribute>() })
                 .Where(x => x.Attribute != null)
@@ -81,11 +81,11 @@ namespace SmartData.Tables
             await dbSet.AddAsync(entity);
             await dbContext.SaveChangesAsync();
 
-            // NEW: Log changes for TrackChange properties
+            // Log changes for TrackChange properties
             if (_changeTrackingEnabled)
                 await LogChangesAsync(entity, null, "Insert", dbContext);
 
-            // NEW: Log integrity for EnsureIntegrity properties
+            // Log integrity for EnsureIntegrity properties
             if (_integrityVerificationEnabled)
                 await LogIntegrityAsync(entity, dbContext);
 
@@ -106,11 +106,11 @@ namespace SmartData.Tables
 
             foreach (var entity in entities)
             {
-                // NEW: Log changes for TrackChange properties
+                // Log changes for TrackChange properties
                 if (_changeTrackingEnabled)
                     await LogChangesAsync(entity, null, "Insert", dbContext);
 
-                // NEW: Log integrity for EnsureIntegrity properties
+                // Log integrity for EnsureIntegrity properties
                 if (_integrityVerificationEnabled)
                     await LogIntegrityAsync(entity, dbContext);
 
@@ -132,16 +132,16 @@ namespace SmartData.Tables
                 var existing = await dbSet.FindAsync(id);
                 if (existing == null) return false;
 
-                // NEW: Capture original values for TrackChange
+                // Capture original values for TrackChange
                 var originalEntity = existing;
 
                 dbContext.Entry(existing).CurrentValues.SetValues(entity);
 
-                // NEW: Log changes for TrackChange properties
+                // Log changes for TrackChange properties
                 if (_changeTrackingEnabled)
                     await LogChangesAsync(entity, originalEntity, "Update", dbContext);
 
-                // NEW: Verify and log integrity for EnsureIntegrity properties
+                // Verify and log integrity for EnsureIntegrity properties
                 if (_integrityVerificationEnabled) await EnsureIntegrityAsync(new[] { originalEntity }, dbContext);
 
                 await dbContext.SaveChangesAsync();
@@ -184,12 +184,12 @@ namespace SmartData.Tables
             var existing = await dbSet.FindAsync(id);
             if (existing != null)
             {
-                // NEW: Capture original values for TrackChange
+                // Capture original values for TrackChange
                 var originalEntity = existing;
 
                 dbContext.Entry(existing).CurrentValues.SetValues(entity);
 
-                // NEW: Log changes for TrackChange properties
+                // Log changes for TrackChange properties
                 if (_changeTrackingEnabled)
                     await LogChangesAsync(entity, originalEntity, "Update", dbContext);
 
@@ -200,11 +200,11 @@ namespace SmartData.Tables
             {
                 await dbSet.AddAsync(entity);
 
-                // NEW: Log changes for TrackChange properties
+                // Log changes for TrackChange properties
                 if (_changeTrackingEnabled)
                     await LogChangesAsync(entity, null, "Insert", dbContext);
 
-                // NEW: Log integrity for EnsureIntegrity properties
+                // Log integrity for EnsureIntegrity properties
                 if (_integrityVerificationEnabled)
                     await LogIntegrityAsync(entity, dbContext);
             }
@@ -294,7 +294,7 @@ namespace SmartData.Tables
             var entity = await dbSet.FindAsync(id);
             if (entity == null) return false;
 
-            // NEW: Log changes for TrackChange properties
+            // Log changes for TrackChange properties
             if (_changeTrackingEnabled)
                 await LogChangesAsync(null, entity, "Delete", dbContext);
 
@@ -326,7 +326,7 @@ namespace SmartData.Tables
 
             foreach (var entity in entities)
             {
-                // NEW: Log changes for TrackChange properties
+                // Log changes for TrackChange properties
                 if (_changeTrackingEnabled)
                     await LogChangesAsync(null, entity, "Delete", dbContext);
             }

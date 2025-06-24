@@ -7,14 +7,15 @@ namespace SmartData.Configurations
     {
         public string ConnectionString { get; set; }
         public string MigrationsAssembly { get; set; }
-        public bool SmartCalcEnabled { get; private set; }
+        
 
         public Action<DbContextOptionsBuilder> OptionsBuilder { get; set; }
         public ILoggerFactory LoggerFactory { get; set; }
         public bool EmbeddingEnabled { get; private set; }
         public bool TimeseriesEnabled { get; private set; }
-        public bool ChangeTrackingEnabled { get; private set; } // NEW: Change tracking toggle
-        public bool IntegrityVerificationEnabled { get; private set; } // NEW: Integrity verification toggle
+        public bool ChangeTrackingEnabled { get; private set; } 
+        public bool IntegrityVerificationEnabled { get; private set; }
+        public bool SmartCalcEnabled { get; private set; }
 
         public SqlDataBuilder WithConnectionString(string connectionString)
         {

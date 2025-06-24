@@ -17,13 +17,13 @@ namespace SmartData.Vectorizer.Search
         {
             _dimension = dimension;
             _logger = logger;
-            _index = FaissNet.Index.CreateDefault(_dimension, MetricType.METRIC_L2); // NEW: Use FlatL2
+            _index = FaissNet.Index.CreateDefault(_dimension, MetricType.METRIC_L2); // Use FlatL2
             _idToEmbeddingId = new Dictionary<long, Guid>();
             _nextId = 0;
             _logger?.LogDebug("Initialized FaissNetSearch with dimension {Dimension} and index type FlatL2", _dimension);
         }
 
-        // NEW: Removed Train method as FlatL2 does not require training
+        
         // Retained for potential future use with other index types
         public void Train(IEnumerable<float[]> embeddings)
         {

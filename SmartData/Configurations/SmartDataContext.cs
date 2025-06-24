@@ -89,7 +89,7 @@ namespace SmartData.Configurations
                 });
             }
 
-            // NEW: Configure sysChangeLog if ChangeTrackingEnabled
+            // Configure sysChangeLog if ChangeTrackingEnabled
             if (_options.ChangeTrackingEnabled)
             {
                 modelBuilder.Entity<ChangeLogRecord>(entity =>
@@ -107,7 +107,7 @@ namespace SmartData.Configurations
                 });
             }
 
-            // NEW: Configure sysIntegrityLog if IntegrityVerificationEnabled
+            //Configure sysIntegrityLog if IntegrityVerificationEnabled
             if (_options.IntegrityVerificationEnabled)
             {
                 modelBuilder.Entity<IntegrityLogRecord>(entity =>

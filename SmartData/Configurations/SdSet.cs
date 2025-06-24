@@ -13,7 +13,7 @@ namespace SmartData.Configurations
         private readonly SqlData _sqlData;
         private readonly ITableCollection<T> _table;
         private readonly IServiceProvider _serviceProvider;
-        private readonly FaissNetSearch _faissIndex; // NEW: Store FaissNetSearch instance
+        private readonly FaissNetSearch _faissIndex; 
 
         public SdSet(SqlData sqlData, IServiceProvider serviceProvider, FaissNetSearch faissIndex, string tableName)
         {
