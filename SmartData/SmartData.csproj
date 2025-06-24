@@ -7,7 +7,7 @@
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
     <Version>0.0.1</Version>
     <PackageId>SmartData</PackageId>
-    <Description>Lightweight .NET library by d42y for IoT data management with relational, embedding, and timeseries support, enabling GPT-based QA and analytics via RAG.</Description>
+    <Description>.NET library by d42y for IoT data management with relational, embedding, and timeseries support, enabling GPT-based QA and analytics via RAG.</Description>
     <Authors>d42y</Authors>
     <Company>d42y</Company>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -22,13 +22,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="GPT\Chat\Model\mobilebert_squad11_int8_qdq_89.4f1.onnx" />
     <None Remove="GPT\Embedder\Model\model.onnx" />
     <None Remove="GPT\Embedder\Model\vocab.txt" />
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="GPT\Chat\Model\mobilebert_squad11_int8_qdq_89.4f1.onnx" />
     <EmbeddedResource Include="GPT\Embedder\Model\model.onnx" />
     <EmbeddedResource Include="GPT\Embedder\Model\vocab.txt" />
   </ItemGroup>
