@@ -1,4 +1,4 @@
-﻿namespace SmartData.GPT.Tokenizer
+﻿namespace SmartData.Vectorizer.Tokenizer
 {
     using System.Reflection;
     using System.IO;

@@ -2,10 +2,10 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SmartData.Configurations;
-using SmartData.GPT.Embedder;
-using SmartData.GPT.Search;
 using SmartData.Tables;
 using SmartData.Tables.Models;
+using SmartData.Vectorizer.Embedder;
+using SmartData.Vectorizer.Search;
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 

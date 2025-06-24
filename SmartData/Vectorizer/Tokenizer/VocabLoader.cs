@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SmartData.GPT.Tokenizer
+namespace SmartData.Vectorizer.Tokenizer
 {
     public class VocabLoader
     {

@@ -1,7 +1,7 @@
 ﻿using System.Globalization;
 using System.Text;
 
-namespace SmartData.GPT.Tokenizer
+namespace SmartData.Vectorizer.Tokenizer
 {
     internal class BasicTokenizer : BaseTokenizer
     {

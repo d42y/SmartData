@@ -1,9 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using SmartData.GPT.Embedder;
-using SmartData.GPT.Search;
 using SmartData.Tables;
 using SmartData.Tables.Models;
+using SmartData.Vectorizer.Embedder;
+using SmartData.Vectorizer.Search;
 using System.Linq.Expressions;
 
 namespace SmartData.Configurations

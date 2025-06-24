@@ -1,4 +1,4 @@
-﻿namespace SmartData.GPT.Tokenizer
+﻿namespace SmartData.Vectorizer.Tokenizer
 {
     internal abstract class BaseTokenizer
     {

@@ -2,8 +2,8 @@
 using SmartData;
 using SmartData.Attributes;
 using SmartData.Configurations;
-using SmartData.GPT.Embedder;
-using SmartData.GPT.Search;
+using SmartData.Vectorizer.Embedder;
+using SmartData.Vectorizer.Search;
 using System.Reflection;
 using System.Text;
 

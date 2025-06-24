@@ -4,10 +4,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using SmartData.GPT.Tokenizer;
-using SmartData.GPT.Extensions;
+using SmartData.Vectorizer.Extensions;
+using SmartData.Vectorizer.Tokenizer;
 
-namespace SmartData.GPT.Embedder
+namespace SmartData.Vectorizer.Embedder
 {
     /// <summary>
     /// Generate Embeddings via All-MiniLM-L6-v2

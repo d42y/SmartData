@@ -1,7 +1,7 @@
 ﻿using FaissNet;
 using Microsoft.Extensions.Logging;
 
-namespace SmartData.GPT.Search
+namespace SmartData.Vectorizer.Search
 {
     public class FaissNetSearch : IDisposable
     {

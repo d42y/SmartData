@@ -22,13 +22,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="GPT\Embedder\Model\model.onnx" />
-    <None Remove="GPT\Embedder\Model\vocab.txt" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <EmbeddedResource Include="GPT\Embedder\Model\model.onnx" />
-    <EmbeddedResource Include="GPT\Embedder\Model\vocab.txt" />
+    <Compile Remove="GPT\**" />
+    <EmbeddedResource Remove="GPT\**" />
+    <None Remove="GPT\**" />
   </ItemGroup>
 
   <ItemGroup>

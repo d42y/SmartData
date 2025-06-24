@@ -5,9 +5,9 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using SmartData.Configurations;
 using SmartData.Extensions;
-using SmartData.GPT.Embedder;
-using SmartData.GPT.Search;
 using SmartData.Tables;
+using SmartData.Vectorizer.Embedder;
+using SmartData.Vectorizer.Search;
 
 namespace SmartData.UnitTests
 {

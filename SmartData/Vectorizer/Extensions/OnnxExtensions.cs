@@ -1,12 +1,12 @@
 ﻿using Microsoft.ML.OnnxRuntime.Tensors;
-using SmartData.GPT.Extensions;
+using SmartData.Vectorizer.Extensions;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SmartData.GPT.Extensions
+namespace SmartData.Vectorizer.Extensions
 {
     public static class OnnxExtensions
     {

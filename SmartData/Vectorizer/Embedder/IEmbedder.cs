@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SmartData.GPT.Embedder
+namespace SmartData.Vectorizer.Embedder
 {
     public interface IEmbedder
     {

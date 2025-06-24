@@ -2,8 +2,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SmartData.Configurations;
-using SmartData.GPT.Embedder;
-using SmartData.GPT.Search;
+using SmartData.Vectorizer.Embedder;
+using SmartData.Vectorizer.Search;
 
 namespace SmartData.Extensions
 {
