@@ -18,10 +18,14 @@ namespace SmartData.UnitTests
         public string Description { get; set; }
     }
 
-    public class TestDbContext : SqlDataContext
+    public class AppDbContext : SqlDataContext
     {
         public SdSet<Sensor> Sensors { get; set; }
 
+        public AppDbContext(DbContextOptions<AppDbContext> options, IServiceProvider serviceProvider)
+            : base(options, serviceProvider)
+        {
+        }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<Sensor>().ToTable("Sensors");
@@ -67,7 +71,7 @@ namespace SmartData.UnitTests
                 }
                 var services = new ServiceCollection();
                 services.AddLogging(builder => builder.AddConsole());
-                services.AddSqlData<TestDbContext>(builder =>
+                services.AddSqlData<AppDbContext>(builder =>
                 {
                     builder.WithConnectionString($"Data Source={_dbPath}")
                            .EnableEmbedding()

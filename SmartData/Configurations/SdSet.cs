@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.DependencyInjection;
 using SmartData.Tables;
 using SmartData.Tables.Models;
@@ -8,12 +9,13 @@ using System.Linq.Expressions;
 
 namespace SmartData.Configurations
 {
-    public class SdSet<T> : IDisposable where T : class
+    public class SdSet<T> : DbSet<T>, IQueryable<T>, IDisposable where T : class
     {
         private readonly SqlData _sqlData;
         private readonly ITableCollection<T> _table;
         private readonly IServiceProvider _serviceProvider;
-        private readonly FaissNetSearch _faissIndex; 
+        private readonly FaissNetSearch _faissIndex;
+        private readonly IQueryable<T> _queryable;
 
         public SdSet(SqlData sqlData, IServiceProvider serviceProvider, FaissNetSearch faissIndex, string tableName)
         {
@@ -21,8 +23,59 @@ namespace SmartData.Configurations
             _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
             _faissIndex = faissIndex ?? throw new ArgumentNullException(nameof(faissIndex));
             _table = sqlData.RegisterTable<T>(tableName);
+
+            // Initialize queryable using SmartDataContext's DbSet
+            using var scope = _serviceProvider.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<SmartDataContext>();
+            _queryable = dbContext.Set<T>();
         }
 
+        // IQueryable implementation
+        public Type ElementType => _queryable.ElementType;
+        public Expression Expression => _queryable.Expression;
+        public IQueryProvider Provider => _queryable.Provider;
+
+        // IEntityType implementation
+        public override IEntityType EntityType
+        {
+            get
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<SmartDataContext>();
+                return dbContext.Model.FindEntityType(typeof(T))
+                    ?? throw new InvalidOperationException($"Entity type {typeof(T).Name} is not found in the model.");
+            }
+        }
+
+        // DbSet-like methods
+        public async Task AddAsync(T entity, CancellationToken cancellationToken = default)
+            => await _table.InsertAsync(entity);
+
+        public async Task AddRangeAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
+            => await _table.InsertAsync(entities);
+
+        public void Remove(T entity)
+        {
+            var id = typeof(T).GetProperty("Id")?.GetValue(entity)
+                ?? throw new InvalidOperationException("Entity must have an Id property.");
+            _table.DeleteAsync(id).GetAwaiter().GetResult();
+        }
+
+        public void RemoveRange(IEnumerable<T> entities)
+        {
+            foreach (var entity in entities)
+            {
+                Remove(entity);
+            }
+        }
+
+        public async Task<T> FindAsync(params object[] keyValues)
+            => await _table.FindByIdAsync(keyValues[0]);
+
+        public async Task<T> FindAsync(object[] keyValues, CancellationToken cancellationToken)
+            => await _table.FindByIdAsync(keyValues[0]);
+
+        // Existing SdSet methods
         public async Task<T> InsertAsync(T entity) => await _table.InsertAsync(entity);
         public async Task InsertAsync(IEnumerable<T> entities) => await _table.InsertAsync(entities);
         public async Task<bool> UpdateAsync(T entity) => await _table.UpdateAsync(entity);
@@ -68,7 +121,6 @@ namespace SmartData.Configurations
                 return results;
             }
 
-            // Query sysEmbeddings for TableName and EntityId
             var embeddingRecords = await dbContext.Set<EmbeddingRecord>()
                 .Where(e => embeddingIds.Contains(e.Id))
                 .Select(e => new { e.Id, e.TableName, e.EntityId })
@@ -78,18 +130,11 @@ namespace SmartData.Configurations
             {
                 try
                 {
-                    // Dynamically query the target table using TableName and EntityId
-                    var tableType = typeof(T); // Assume T matches TableName (e.g., Sensor for "Sensors")
                     var entity = await _table.FindByIdAsync(embeddingRecord.EntityId);
-                    //var entitySet = dbContext.Set(tableType);
-                    //var entity = await entitySet
-                    //    .FindAsync(embeddingRecord.EntityId);
-
                     if (entity != null)
                     {
-                        // Create QueryResult with record data
                         var data = new Dictionary<string, object>();
-                        foreach (var prop in tableType.GetProperties())
+                        foreach (var prop in typeof(T).GetProperties())
                         {
                             data[prop.Name] = prop.GetValue(entity);
                         }
@@ -99,7 +144,6 @@ namespace SmartData.Configurations
                 }
                 catch (Exception ex)
                 {
-                    // Log error and continue with other records
                     Console.WriteLine($"Failed to retrieve record for EmbeddingId {embeddingRecord.Id}: {ex.Message}");
                 }
             }

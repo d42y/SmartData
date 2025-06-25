@@ -1,6 +1,6 @@
 # SmartData
 
-SmartData is a lightweight .NET 8.0 library developed by d42y to simplify data management for Internet of Things (IoT) applications. Built on Entity Framework Core, it offers an intuitive `SdSet<T>` API for relational data, embeddings, and timeseries, with integrated Retrieval-Augmented Generation (RAG) and GPT-based analytics. This enables developers to easily implement GPT-powered question-and-answer (Q&A) systems and gain advanced insights from IoT data, requiring minimal expertise in RAG or vector search technologies.
+SmartData is a .NET 8.0 library developed by d42y to simplify data management for Internet of Things (IoT) applications. Built on Entity Framework Core, it offers an intuitive `SdSet<T>` API for relational data, embeddings, and timeseries, with integrated Retrieval-Augmented Generation (RAG) and GPT-based analytics. This enables developers to easily implement GPT-powered question-and-answer (Q&A) systems and gain advanced insights from IoT data, requiring minimal expertise in RAG or vector search technologies.
 
 ## Goal
 
@@ -19,7 +19,7 @@ SmartData simplifies data management for IoT applications with an intuitive `SdS
 
 ## Version
 
-0.0.1 (beta)
+0.0.2 (beta)
 
 ## License
 
@@ -31,7 +31,7 @@ SmartData is released under the [MIT License](#license).
    Install the `SmartData` package:
 
    ```bash
-   dotnet add package SmartData --version 0.0.1
+   dotnet add package SmartData --version 0.0.2
    ```
 
 2. **Add Dependencies**:

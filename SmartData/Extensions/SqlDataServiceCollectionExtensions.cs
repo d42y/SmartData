@@ -28,6 +28,14 @@ namespace SmartData.Extensions
             if (string.IsNullOrEmpty(builder.ConnectionString))
                 throw new InvalidOperationException("Connection string is required.");
 
+            services.AddDbContext<TContext>(options =>
+            {
+                providerConfiguration(options);
+                builder.OptionsBuilder?.Invoke(options);
+                if (builder.LoggerFactory != null)
+                    options.UseLoggerFactory(builder.LoggerFactory);
+            }, ServiceLifetime.Scoped);
+
             services.AddDbContext<SmartDataContext>(options =>
             {
                 providerConfiguration(options);
@@ -53,14 +61,6 @@ namespace SmartData.Extensions
             services.AddScoped<FaissNetSearch>(sp =>
                 new FaissNetSearch(dimension: 384, sp.GetService<ILogger<FaissNetSearch>>()));
 
-            services.AddScoped<TContext>();
-            services.AddScoped<SmartDataContext>(sp =>
-            {
-                var context = sp.GetRequiredService<TContext>();
-                var options = sp.GetRequiredService<DbContextOptions<SmartDataContext>>();
-                var smartDataOptions = sp.GetService<SmartDataOptions>();
-                return new SmartDataContext(options, smartDataOptions, builder.MigrationsAssembly, context);
-            });
             services.AddScoped<SqlData>(sp =>
             {
                 var context = sp.GetRequiredService<TContext>();

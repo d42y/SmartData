@@ -12,6 +12,10 @@ namespace DemoIoT
     {
         public SdSet<Sensor> Sensors { get; set; }
 
+        public AppDbContext(DbContextOptions<AppDbContext> options, IServiceProvider serviceProvider)
+            : base(options, serviceProvider)
+        {
+        }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<Sensor>().ToTable("Sensors");

@@ -41,7 +41,7 @@
         {
             //ListEmbeddedResources();
             var assembly = Assembly.GetExecutingAssembly();
-            string resourceName = "SmartData.GPT.Embedder.Model.vocab.txt";
+            string resourceName = "SmartData.Vectorizer.Embedder.Model.vocab.txt";
 
             using var stream = assembly.GetManifestResourceStream(resourceName);
             if (stream == null)

@@ -1,5 +1,6 @@
 ﻿using DemoShared;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SmartData;
@@ -8,6 +9,65 @@ using SmartData.Extensions;
 
 namespace DemoSqlServer
 {
+    public class AppDbContext : SqlDataContext
+    {
+        public SdSet<Product> Products { get; set; }
+        public SdSet<Customer> Customers { get; set; }
+
+        public AppDbContext(DbContextOptions<AppDbContext> options, IServiceProvider serviceProvider)
+            : base(options, serviceProvider)
+        {
+        }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            // Configure Product
+            modelBuilder.Entity<Product>().ToTable("Products"); // Explicitly map to Products
+            modelBuilder.Entity<Product>().Property(p => p.Name).IsRequired().HasMaxLength(100);
+            modelBuilder.Entity<Product>().Property(p => p.Description).HasMaxLength(500);
+
+            // Configure Customer
+            modelBuilder.Entity<Customer>().ToTable("Customers"); // Explicitly map to Customers
+            modelBuilder.Entity<Customer>().Property(c => c.Name).IsRequired().HasMaxLength(100);
+            modelBuilder.Entity<Customer>().Property(c => c.Email).IsRequired().HasMaxLength(255);
+
+            // Configure one-to-many relationship with navigation property
+            modelBuilder.Entity<Product>()
+                .HasOne(p => p.Customer)
+                .WithMany(c => c.Products)
+                .HasForeignKey(p => p.CustomerId)
+                .OnDelete(DeleteBehavior.Cascade);
+        }
+    }
+
+    public class SmartDataContextFactory : IDesignTimeDbContextFactory<SmartDataContext>
+    {
+        public SmartDataContext CreateDbContext(string[] args)
+        {
+            var services = new ServiceCollection();
+            services.AddSqlData<AppDbContext>(builder =>
+            {
+                builder.WithConnectionString("Server=localhost;Database=SmartDataDemo;Trusted_Connection=True;Persist Security Info=False;TrustServerCertificate=True;")
+                       .WithMigrationsAssembly("DemoSqlServer");
+            }, options => options.UseSqlServer("Server=localhost;Database=SmartDataDemo;Trusted_Connection=True;Persist Security Info=False;TrustServerCertificate=True;",
+                sqlOptions => sqlOptions.MigrationsAssembly("DemoSqlServer")));
+
+            var serviceProvider = services.BuildServiceProvider();
+            var appDbContext = serviceProvider.GetRequiredService<AppDbContext>();
+            var sqlData = serviceProvider.GetRequiredService<SqlData>();
+
+
+            var optionsBuilder = new DbContextOptionsBuilder<SmartDataContext>();
+            optionsBuilder.UseSqlServer("Server=localhost;Database=SmartDataDemo;Trusted_Connection=True;Persist Security Info=False;TrustServerCertificate=True;",
+                sqlOptions => sqlOptions.MigrationsAssembly("DemoSqlServer"));
+
+            var smartDataOptions = serviceProvider.GetRequiredService<SmartDataOptions>(); // NEW: Resolve SmartDataOptions
+            var dbContext = new SmartDataContext(optionsBuilder.Options, smartDataOptions, migrationsAssembly: "DemoSqlite", sqlDataContext: appDbContext);
+
+            return dbContext;
+        }
+    }
+
     class Program
     {
         static async Task Main(string[] args)
@@ -35,19 +95,20 @@ namespace DemoSqlServer
             using (var scope = serviceProvider.CreateScope())
             {
                 var sqlData = scope.ServiceProvider.GetRequiredService<SqlData>();
-                var dbContext = scope.ServiceProvider.GetRequiredService<SmartDataContext>();
+                //var dbContext = scope.ServiceProvider.GetRequiredService<SmartDataContext>();
                 var appDbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                 await sqlData.MigrateAsync();
 
-                await RunDemoAsync(appDbContext, dbContext);
+                await RunDemoAsync(appDbContext);
             }
         }
 
-        static async Task RunDemoAsync(AppDbContext appDbContext, SmartDataContext dbContext)
+        static async Task RunDemoAsync(AppDbContext appDbContext)
         {
             var products = appDbContext.Products;
             var customers = appDbContext.Customers;
+            
 
             Console.WriteLine("Inserting customers...");
             var customer1 = new Customer { Name = "John Doe", Email = "john.doe@example.com" };
@@ -93,7 +154,7 @@ namespace DemoSqlServer
                 FROM Customers c
                 LEFT JOIN Products p ON c.Id = p.CustomerId
                 ORDER BY c.Name, p.Name";
-            var results = await dbContext.ExecuteSqlQueryAsync(sqlQuery);
+            var results = await appDbContext.ExecuteSqlQueryAsync(sqlQuery);
             Console.WriteLine("Query results as JSON:");
             foreach (var result in results)
             {

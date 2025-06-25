@@ -89,7 +89,6 @@ namespace SmartData.Configurations
                 });
             }
 
-            // Configure sysChangeLog if ChangeTrackingEnabled
             if (_options.ChangeTrackingEnabled)
             {
                 modelBuilder.Entity<ChangeLogRecord>(entity =>
@@ -107,7 +106,6 @@ namespace SmartData.Configurations
                 });
             }
 
-            //Configure sysIntegrityLog if IntegrityVerificationEnabled
             if (_options.IntegrityVerificationEnabled)
             {
                 modelBuilder.Entity<IntegrityLogRecord>(entity =>
@@ -117,7 +115,7 @@ namespace SmartData.Configurations
                     entity.Property(e => e.TableName).IsRequired().HasMaxLength(255);
                     entity.Property(e => e.EntityId).IsRequired().HasMaxLength(128);
                     entity.Property(e => e.PropertyName).IsRequired().HasMaxLength(128);
-                    entity.Property(e => e.DataHash).IsRequired().HasMaxLength(64); // SHA-256 hash
+                    entity.Property(e => e.DataHash).IsRequired().HasMaxLength(64);
                     entity.Property(e => e.PreviousHash).HasMaxLength(64);
                     entity.Property(e => e.Timestamp).IsRequired();
                     entity.HasIndex(e => new { e.TableName, e.EntityId, e.PropertyName, e.Timestamp });

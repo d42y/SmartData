@@ -5,13 +5,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-    <Version>0.0.1</Version>
-    <PackageId>SmartData</PackageId>
+    <Version>0.0.3-beta</Version>
+    <PackageId>d42y.SmartData</PackageId>
     <Description>.NET library by d42y for IoT data management with relational, embedding, and timeseries support, enabling GPT-based QA and analytics via RAG.</Description>
     <Authors>d42y</Authors>
     <Company>d42y</Company>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageTags>SmartData;IoT;RAG;GPT;Analytics;EntityFrameworkCore;Embeddings;Timeseries;FaissNet</PackageTags>
+    <PackageTags>SmartData;IoT;RAG; Analytics;EntityFrameworkCore;Embeddings;Timeseries;FaissNet</PackageTags>
     <RepositoryUrl>https://github.com/d42y/SmartData</RepositoryUrl>
     <Title>SmartData</Title>
     <Copyright>d42y</Copyright>

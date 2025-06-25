@@ -28,7 +28,7 @@ namespace SmartData.Vectorizer.Embedder
         private InferenceSession LoadModelFromResource()
         {
             var assembly = Assembly.GetExecutingAssembly();
-            string resourceName = "SmartData.GPT.Embedder.Model.model.onnx";
+            string resourceName = "SmartData.Vectorizer.Embedder.Model.model.onnx";
 
             using var stream = assembly.GetManifestResourceStream(resourceName);
             if (stream == null)

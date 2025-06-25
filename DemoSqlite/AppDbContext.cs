@@ -9,6 +9,10 @@ namespace DemoSqlite
         public SdSet<Product> Products { get; set; }
         public SdSet<Customer> Customers { get; set; }
 
+        public AppDbContext(DbContextOptions<AppDbContext> options, IServiceProvider serviceProvider)
+            : base(options, serviceProvider)
+        {
+        }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<Product>().ToTable("Products");

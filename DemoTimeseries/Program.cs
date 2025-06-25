@@ -22,6 +22,10 @@ namespace DemoTimeseries
 
         public SdSet<Sensor> Sensors { get; private set; }
 
+        public AppDbContext(DbContextOptions<AppDbContext> options, IServiceProvider serviceProvider)
+            : base(options, serviceProvider)
+        {
+        }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<Sensor>().ToTable("Sensors");
