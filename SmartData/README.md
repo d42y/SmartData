@@ -1,25 +1,27 @@
 # SmartData
 
-SmartData is a .NET 8.0 library developed by d42y to simplify data management for Internet of Things (IoT) applications. Built on Entity Framework Core, it offers an intuitive `SdSet<T>` API for relational data, embeddings, and timeseries, with integrated Retrieval-Augmented Generation (RAG) and GPT-based analytics. This enables developers to easily implement GPT-powered question-and-answer (Q&A) systems and gain advanced insights from IoT data, requiring minimal expertise in RAG or vector search technologies.
+SmartData is a .NET 8.0 library developed by d42y to simplify data management for Internet of Things (IoT) and smart building applications. Built on Entity Framework Core, it provides an intuitive `SdSet<T>` API for relational data, vector embeddings, timeseries, change tracking, data integrity, and advanced analytics. With integrated Retrieval-Augmented Generation (RAG) and analytics capabilities, SmartData enables developers to implement GPT-powered question-and-answer (Q&A) systems and gain advanced insights from IoT data with minimal expertise in RAG or vector search technologies.
 
 ## Goal
 
-SmartData simplifies data management for IoT applications with an intuitive `SdSet<T>` API for relational data, embeddings, and timeseries. It integrates Retrieval-Augmented Generation (RAG) and GPT-based analytics to enable developers to easily implement GPT-powered question-and-answer (Q&A) systems and advanced data insights on IoT data, with minimal expertise in RAG or vector search technologies.
+SmartData simplifies data management for IoT and smart building applications by offering a unified `SdSet<T>` API for relational data, vector embeddings, timeseries, change tracking, data integrity, and analytics. It integrates Retrieval-Augmented Generation (RAG) and advanced analytics to enable developers to build GPT-powered Q&A systems and derive actionable insights from IoT data, such as sensor readings, trend analysis, and anomaly detection, with minimal setup and expertise.
 
 ## Features
 
-- **Relational Data Management**: Perform CRUD operations using the `SdSet<T>` API.
-- **Embedding Support**: Generate 384-dimensional embeddings for semantic search, powered by `AllMiniLmL6V2Embedder` and `FaissNet`, enabling RAG for GPT Q&A and analytics.
-- **Timeseries Data**: Store and query IoT timeseries data (e.g., sensor readings) with interpolation methods (linear, nearest).
-- **GPT-Based Analytics**: Leverage embedded models for advanced data insights, such as trend analysis and anomaly detection.
-- **Schema Management**: Automatically create tables for entities, embeddings (`sysEmbeddings`), and timeseries (`sysTsBaseValues`, `sysTsDeltaT`) without migrations, or use migrations for production.
-- **Dependency Injection**: Integrates with `Microsoft.Extensions.DependencyInjection` for scoped services.
+- **Relational Data Management**: Perform CRUD operations using the `SdSet<T>` API, built on Entity Framework Core, with support for multiple SQL database providers (e.g., SQLite, SQL Server).
+- **Vector Embeddings**: Generate 384-dimensional embeddings for semantic search using `AllMiniLmL6V2Embedder` and `FaissNet`, enabling RAG for GPT-powered Q&A and analytics.
+- **Timeseries Data**: Store and query IoT timeseries data (e.g., sensor readings) with support for interpolation methods (None, Linear, Nearest, Previous, Next).
+- **Change Tracking**: Log entity changes (insert, update, delete) with detailed audit trails in the `sysChangeLog` table.
+- **Data Integrity**: Ensure data consistency with SHA256-based hash chains stored in the `sysIntegrityLog` table.
+- **Advanced Analytics**: Execute complex analytics workflows using SQL queries, C# scripts, conditional logic, and timeseries operations via the `SmartAnalyticsService`, with support for event-driven and time-based triggers.
+- **Schema Management**: Automatically create tables for entities, embeddings (`sysEmbeddings`), timeseries (`sysTimeseriesBaseValues`, `sysTimeseriesDeltas`), change logs (`sysChangeLog`), integrity logs (`sysIntegrityLog`), and analytics (`sysAnalytics`, `sysAnalyticsSteps`) without migrations, or use migrations for production environments.
+- **Dependency Injection**: Seamlessly integrates with `Microsoft.Extensions.DependencyInjection` for scoped services.
 - **Database Support**: Compatible with SQLite, SQL Server, and other EF Core providers.
-- **Embedded Resources**: Includes ONNX models and `FaissNet` for out-of-the-box RAG and analytics.
+- **Embedded Resources**: Includes ONNX models and `FaissNet` for out-of-the-box RAG and analytics capabilities.
 
 ## Version
 
-0.0.2 (beta)
+0.0.3 (beta)
 
 ## License
 
@@ -31,7 +33,7 @@ SmartData is released under the [MIT License](#license).
    Install the `SmartData` package:
 
    ```bash
-   dotnet add package SmartData --version 0.0.2
+   dotnet add package SmartData --version 0.0.3
    ```
 
 2. **Add Dependencies**:
@@ -61,12 +63,12 @@ SmartData is released under the [MIT License](#license).
 
 ### 1. Define Your Entities
 
-Create model classes for IoT or relational data, annotated for embeddings or timeseries.
+Create model classes for IoT or relational data, using attributes to enable embeddings, timeseries, change tracking, or data integrity.
 
 **IoT Example (Sensor)**:
 
 ```csharp
-using SmartData.Attributes;
+using SmartData.Models;
 using System.ComponentModel.DataAnnotations;
 
 namespace MyApp
@@ -76,6 +78,8 @@ namespace MyApp
         [Key]
         public string Id { get; set; }
         [Timeseries]
+        [TrackChange]
+        [EnsureIntegrity]
         public int Temperature { get; set; }
         [Embeddable("Sensor {Id} {Description} is {Temperature} degrees F")]
         public string Description { get; set; }
@@ -95,6 +99,7 @@ namespace MyApp
     {
         [Key]
         public int Id { get; set; }
+        [TrackChange]
         public string Name { get; set; }
         public string Email { get; set; }
         public List<Product> Products { get; set; } = new();
@@ -102,7 +107,7 @@ namespace MyApp
 }
 
 // Product.cs
-using SmartData.Attributes;
+using SmartData.Models;
 using System.ComponentModel.DataAnnotations;
 
 namespace MyApp
@@ -111,6 +116,7 @@ namespace MyApp
     {
         [Key]
         public int Id { get; set; }
+        [TrackChange]
         public string Name { get; set; }
         [Embeddable("Product {Name} owned by customer {CustomerId}")]
         public string Description { get; set; }
@@ -120,8 +126,10 @@ namespace MyApp
 }
 ```
 
-- `[Embeddable]`: Generates embeddings for RAG-based Q&A and analytics.
-- `[Timeseries]`: Stores timeseries data (e.g., IoT sensor readings).
+- `[Embeddable]`: Generates embeddings for semantic search and RAG-based Q&A.
+- `[Timeseries]`: Stores timeseries data for IoT sensor readings.
+- `[TrackChange]`: Logs changes to properties in `sysChangeLog`.
+- `[EnsureIntegrity]`: Verifies data integrity with hash chains in `sysIntegrityLog`.
 
 ### 2. Set Up Dependency Injection
 
@@ -132,44 +140,47 @@ Configure `SmartData` with your database provider. Below are examples for SQLite
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using SmartData;
-using SmartData.Configurations;
-using SmartData.Extensions;
+making SmartData.Core;
 
 var services = new ServiceCollection();
 services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Debug));
-services.AddSqlData<MyDbContext>(builder =>
+services.AddSmartData<MyDbContext>(builder =>
 {
     builder.WithConnectionString("Data Source=IoTData.db")
            .WithLogging(services.BuildServiceProvider().GetRequiredService<ILoggerFactory>())
-           .EnableEmbedding()
-           .EnableTimeseries();
+           .WithEmbeddings()
+           .WithTimeseries()
+           .WithChangeTracking()
+           .WithIntegrityVerification()
+           .WithCalculations();
 }, options => options.UseSqlite("Data Source=IoTData.db"));
 
 var serviceProvider = services.BuildServiceProvider();
 ```
 
 - **No Migrations**: Schema is created automatically, ideal for IoT prototyping.
-- **Embedding/Timeseries**: Enabled for RAG Q&A and timeseries analytics.
+- **Features**: Enables embeddings, timeseries, change tracking, integrity verification, and analytics.
 
 #### SQL Server (With Migrations)
 
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using SmartData;
-using SmartData.Configurations;
-using SmartData.Extensions;
+using SmartData.Core;
 
 var services = new ServiceCollection();
 services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Debug));
 var loggerFactory = services.BuildServiceProvider().GetRequiredService<ILoggerFactory>();
-services.AddSqlData<MyDbContext>(builder =>
+services.AddSmartData<MyDbContext>(builder =>
 {
     builder.WithConnectionString("Server=localhost;Database=IoTData;Trusted_Connection=True;Persist Security Info=False;TrustServerCertificate=True;")
-           .WithMigrationsAssembly("MyApp")
+           .WithMigrations("MyApp")
            .WithLogging(loggerFactory)
-           .EnableEmbedding();
+           .WithEmbeddings()
+           .WithTimeseries()
+           .WithChangeTracking()
+           .WithIntegrityVerification()
+           .WithCalculations();
 }, options => options.UseSqlServer("Server=localhost;Database=IoTData;Trusted_Connection=True;Persist Security Info=False;TrustServerCertificate=True;",
     sqlOptions => sqlOptions.MigrationsAssembly("MyApp")));
 
@@ -177,24 +188,26 @@ var serviceProvider = services.BuildServiceProvider();
 ```
 
 - **Migrations**: Recommended for production to manage schema changes.
-- **SQL Server**: Supports robust IoT data storage.
+- **SQL Server**: Supports robust IoT data storage and analytics.
 
 ### 3. Define Your DbContext
 
 Create a context class to manage entities:
 
 ```csharp
-using SmartData.Configurations;
-using SmartData.Tables;
 using Microsoft.EntityFrameworkCore;
+using SmartData.Data;
 
 namespace MyApp
 {
-    public class MyDbContext : SqlDataContext
+    public class MyDbContext : DataContext
     {
-        public SdSet<Sensor> Sensors { get; set; }
-        public SdSet<Customer> Customers { get; set; }
-        public SdSet<Product> Products { get; set; }
+        public MyDbContext(DbContextOptions options, DataOptions dataOptions)
+            : base(options, dataOptions) { }
+
+        public DbSet<Sensor> Sensors { get; set; }
+        public DbSet<Customer> Customers { get; set; }
+        public DbSet<Product> Products { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -222,33 +235,54 @@ namespace MyApp
 
 ### 4. Use SmartData for IoT, RAG, and Analytics
 
-Manage IoT data, perform semantic searches, and enable GPT-based Q&A and analytics:
+Manage IoT data, perform semantic searches, enable GPT-based Q&A, and run advanced analytics workflows:
 
 ```csharp
+using Microsoft.Extensions.DependencyInjection;
+using SmartData.Data;
+using SmartData.Models;
+using SmartData.AnalyticsService;
+
 using var scope = serviceProvider.CreateScope();
-var sqlData = scope.ServiceProvider.GetRequiredService<SqlData>();
-var dbContext = scope.ServiceProvider.GetRequiredService<SmartDataContext>();
-var context = scope.ServiceProvider.GetRequiredService<MyDbContext>();
+var dbContext = scope.ServiceProvider.GetRequiredService<MyDbContext>();
+var analyticsService = scope.ServiceProvider.GetRequiredService<SmartAnalyticsService>();
 
 // Create schema (or apply migrations)
-await sqlData.MigrateAsync();
+await dbContext.EnsureSchemaCreatedAsync();
 
 // Insert IoT sensor data
-var sensors = context.Sensors;
+var sensorService = new DataService<Sensor>(
+    scope.ServiceProvider, 
+    scope.ServiceProvider.GetRequiredService<DataOptions>(), 
+    "Sensors",
+    scope.ServiceProvider.GetService<IEmbeddingProvider>(),
+    scope.ServiceProvider.GetService<IFaissSearch>(),
+    scope.ServiceProvider.GetService<IEventBus>()
+);
 var sensor = new Sensor
 {
     Id = "sensor1",
     Temperature = 70,
     Description = "Temperature is 70°F"
 };
-await sensors.UpsertAsync(sensor);
+await sensorService.UpsertAsync(sensor);
 
 // Insert relational data
-var customers = context.Customers;
-var products = context.Products;
+var customerService = new DataService<Customer>(
+    scope.ServiceProvider, 
+    scope.ServiceProvider.GetRequiredService<DataOptions>(), 
+    "Customers"
+);
+var productService = new DataService<Product>(
+    scope.ServiceProvider, 
+    scope.ServiceProvider.GetRequiredService<DataOptions>(), 
+    "Products",
+    scope.ServiceProvider.GetService<IEmbeddingProvider>(),
+    scope.ServiceProvider.GetService<IFaissSearch>()
+);
 var customer = new Customer { Name = "John Doe", Email = "john.doe@example.com" };
-await customers.UpsertAsync(customer);
-await products.UpsertAsync(new Product
+await customerService.UpsertAsync(customer);
+await productService.UpsertAsync(new Product
 {
     Name = "Laptop",
     Description = "High-performance laptop",
@@ -256,47 +290,161 @@ await products.UpsertAsync(new Product
 });
 
 // Semantic search for RAG
-var matches = await sensors.SearchEmbeddings("temperature 70", topK = 2);
+var matches = await sensorService.SearchAsync("temperature 70", topK = 2);
 foreach (var result in matches)
 {
     Console.WriteLine($"Sensor Match: Id={result.GetValue<string>("Id")}, Temperature={result.GetValue<int>("Temperature")}°F, Score={result.GetValue<float>("Score")}");
 }
 
-// GPT Q&A with ChatService
-var chatService = scope.ServiceProvider.GetRequiredService<ChatService>();
-var response = await chatService.ChatAsync("What is the current temperature?", sensors, topK = 2);
-Console.WriteLine($"Q: What is the current temperature?");
-Console.WriteLine($"A: {response}");
-
-// GPT-based analytics (example: trend analysis)
-var timeseries = await sensors.GetInterpolatedTimeseriesAsync(
+// Timeseries data retrieval with interpolation
+var timeseries = await sensorService.GetInterpolatedTimeseriesAsync(
     "sensor1", nameof(Sensor.Temperature), DateTime.UtcNow.AddDays(-7), DateTime.UtcNow, TimeSpan.FromHours(1), InterpolationMethod.Linear);
 Console.WriteLine("Temperature Trend (Last 7 Days):");
 foreach (var data in timeseries)
 {
     Console.WriteLine($"Timestamp: {data.Timestamp}, Temperature: {data.Value}°F");
 }
+
+// Define and run an analytics workflow
+var analyticsConfig = new AnalyticsConfig
+{
+    Id = Guid.NewGuid(),
+    Name = "TemperatureTrendAnalysis",
+    Interval = 3600, // Run every hour
+    Embeddable = true,
+    Steps = new List<AnalyticsStepConfig>
+    {
+        new AnalyticsStepConfig
+        {
+            Type = AnalyticsStepType.SqlQuery,
+            Config = "SELECT AVG(Temperature) as AvgTemp FROM Sensors WHERE Timestamp >= @p0",
+            OutputVariable = "avgTemp",
+            MaxLoop = 10
+        },
+        new AnalyticsStepConfig
+        {
+            Type = AnalyticsStepType.CSharp,
+            Config = "context[\"avgTemp\"] > 75 ? \"High\" : \"Normal\"",
+            OutputVariable = "tempStatus",
+            MaxLoop = 10
+        }
+    }
+};
+await analyticsService.AddAnalyticsAsync(analyticsConfig);
+var result = await analyticsService.ExecuteAnalyticsAsync(analyticsConfig.Id);
+Console.WriteLine($"Analytics Result: {result}");
+
+// Export analytics configuration
+var exportedJson = await analyticsService.ExportAnalyticsAsync(analyticsConfig.Id);
+Console.WriteLine($"Exported Analytics Config: {exportedJson}");
 ```
 
 ### Example Output
 
 ```
-Tables in database: Sensors, Customers, Products, sysEmbeddings
+Tables in database: Sensors, Customers, Products, sysEmbeddings, sysTimeseriesBaseValues, sysTimeseriesDeltas, sysChangeLog, sysIntegrityLog, sysAnalytics, sysAnalyticsSteps
 Inserted sensor sensor1 with temperature 70°F
 Inserted customer John Doe (Id: 1)
 Inserted product Laptop (Id: 1)
 Sensor Match: Id=sensor1, Temperature=70°F, Score=1
-Q: What is the current temperature?
-A: Based on the context: Sensor sensor1 Temperature is 70°F is 70 degrees F, the answer is: 70°F.
 Temperature Trend (Last 7 Days):
-Timestamp: 2025-06-11T08:13:00Z, Temperature: 70°F
+Timestamp: 2025-06-22T08:13:00Z, Temperature: 70°F
+Analytics Result: Normal
+Exported Analytics Config: {
+  "Id": "guid-value",
+  "Name": "TemperatureTrendAnalysis",
+  "Interval": 3600,
+  "Embeddable": true,
+  "Steps": [
+    {
+      "Type": "SqlQuery",
+      "Config": "SELECT AVG(Temperature) as AvgTemp FROM Sensors WHERE Timestamp >= @p0",
+      "OutputVariable": "avgTemp",
+      "MaxLoop": 10
+    },
+    {
+      "Type": "CSharp",
+      "Config": "context[\"avgTemp\"] > 75 ? \"High\" : \"Normal\"",
+      "OutputVariable": "tempStatus",
+      "MaxLoop": 10
+    }
+  ]
+}
 ```
+
+## Analytics Features
+
+The `SmartAnalyticsService` enables advanced analytics workflows for IoT and smart building applications. Key capabilities include:
+
+- **Step Types**:
+  - `SqlQuery`: Execute SQL SELECT queries to aggregate data (e.g., AVG, SUM, COUNT).
+  - `CSharp`: Run C# scripts for custom calculations or logic.
+  - `Condition`: Implement conditional branching with boolean C# scripts.
+  - `Variable`: Store intermediate results for use in subsequent steps.
+  - `Timeseries`: Retrieve and analyze timeseries data with interpolation.
+- **Triggers**:
+  - **Time-Based**: Run analytics at specified intervals (e.g., every hour).
+  - **Event-Driven**: Trigger analytics based on entity changes (insert, update, delete).
+- **Change Tracking**: Automatically logs analytics results in `sysChangeLog` if `EnableChangeTracking` is enabled.
+- **Validation**: Ensures safe SQL queries (only SELECT allowed) and C# scripts (no dangerous namespaces like `System.IO`).
+- **Export/Import**: Serialize analytics configurations to JSON for portability.
+
+### Example Analytics Workflow
+
+Calculate the average temperature and determine if it's high or normal:
+
+```csharp
+var config = new AnalyticsConfig
+{
+    Id = Guid.NewGuid(),
+    Name = "TemperatureCheck",
+    Interval = -1, // Event-driven
+    Steps = new List<AnalyticsStepConfig>
+    {
+        new AnalyticsStepConfig
+        {
+            Type = AnalyticsStepType.SqlQuery,
+            Config = "SELECT AVG(Temperature) as AvgTemp FROM Sensors",
+            OutputVariable = "avgTemp"
+        },
+        new AnalyticsStepConfig
+        {
+            Type = AnalyticsStepType.Condition,
+            Config = "context[\"avgTemp\"] > 75",
+            OutputVariable = "2", // Go to step 2 if true
+            MaxLoop = 10
+        },
+        new AnalyticsStepConfig
+        {
+            Type = AnalyticsStepType.Variable,
+            Config = "\"Normal\"",
+            OutputVariable = "status"
+        },
+        new AnalyticsStepConfig
+        {
+            Type = AnalyticsStepType.Variable,
+            Config = "\"High\"",
+            OutputVariable = "status"
+        }
+    }
+};
+await analyticsService.AddAnalyticsAsync(config);
+```
+
+This workflow:
+1. Calculates the average temperature using a SQL query.
+2. Checks if the average is above 75°F.
+3. Sets the status to "Normal" or "High" based on the condition.
 
 ## Configuration
 
 - **Database Providers**: SQLite for IoT prototyping, SQL Server for production, or other EF Core providers.
-- **Embedding**: Enabled with `EnableEmbedding()`; uses embedded ONNX models and `FaissNet` for RAG Q&A and analytics.
-- **Timeseries**: Enabled with `EnableTimeseries()`; stores IoT data in `sysTsBaseValues` and `sysTsDeltaT`.
+- **Feature Flags**:
+  - `WithEmbeddings()`: Enables vector embeddings for RAG Q&A and analytics.
+  - `WithTimeseries()`: Enables timeseries data storage and retrieval.
+  - `WithChangeTracking()`: Enables change logging for audit trails.
+  - `WithIntegrityVerification()`: Enables data integrity checks with hash chains.
+  - `WithCalculations()`: Enables advanced analytics via `SmartAnalyticsService`.
 - **Schema Management**:
   - **No Migrations**: Automatic schema creation for development (e.g., IoT prototyping).
   - **Migrations**: Recommended for production to manage schema changes.
@@ -318,39 +466,36 @@ For production, use migrations to manage database schema changes:
    dotnet ef database update --project MyApp.csproj
    ```
 
-3. Configure `SmartDataContextFactory` for migrations:
+3. Configure `IDesignTimeDbContextFactory` for migrations:
 
 ```csharp
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.Extensions.DependencyInjection;
-using SmartData;
-using SmartData.Configurations;
-using SmartData.Extensions;
+using SmartData.Core;
+using SmartData.Data;
 
 namespace MyApp
 {
-    public class SmartDataContextFactory : IDesignTimeDbContextFactory<SmartDataContext>
+    public class MyDbContextFactory : IDesignTimeDbContextFactory<MyDbContext>
     {
-        public SmartDataContext CreateDbContext(string[] args)
+        public MyDbContext CreateDbContext(string[] args)
         {
             var services = new ServiceCollection();
-            services.AddSqlData<MyDbContext>(builder =>
+            services.AddSmartData<MyDbContext>(builder =>
             {
                 builder.WithConnectionString("Server=localhost;Database=IoTData;Trusted_Connection=True;Persist Security Info=False;TrustServerCertificate=True;")
-                       .WithMigrationsAssembly("MyApp");
+                       .WithMigrations("MyApp")
+                       .WithEmbeddings()
+                       .WithTimeseries()
+                       .WithChangeTracking()
+                       .WithIntegrityVerification()
+                       .WithCalculations();
             }, options => options.UseSqlServer("Server=localhost;Database=IoTData;Trusted_Connection=True;Persist Security Info=False;TrustServerCertificate=True;",
                 sqlOptions => sqlOptions.MigrationsAssembly("MyApp")));
 
             var serviceProvider = services.BuildServiceProvider();
-            var appDbContext = serviceProvider.GetRequiredService<MyDbContext>();
-            var smartDataOptions = serviceProvider.GetRequiredService<SmartDataOptions>();
-
-            var optionsBuilder = new DbContextOptionsBuilder<SmartDataContext>();
-            optionsBuilder.UseSqlServer("Server=localhost;Database=IoTData;Trusted_Connection=True;Persist Security Info=False;TrustServerCertificate=True;",
-                sqlOptions => sqlOptions.MigrationsAssembly("MyApp"));
-
-            return new SmartDataContext(optionsBuilder.Options, smartDataOptions, migrationsAssembly: "MyApp", sqlDataContext: appDbContext);
+            return serviceProvider.GetRequiredService<MyDbContext>();
         }
     }
 }

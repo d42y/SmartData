@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-    <Version>0.0.3-beta</Version>
+    <Version>0.0.4</Version>
     <PackageId>d42y.SmartData</PackageId>
     <Description>.NET library by d42y for IoT data management with relational, embedding, and timeseries support, enabling GPT-based QA and analytics via RAG.</Description>
     <Authors>d42y</Authors>
@@ -36,6 +36,8 @@
 
   <ItemGroup>
     <PackageReference Include="FaissNet" Version="1.1.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.8.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.6" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.6">
       <PrivateAssets>all</PrivateAssets>
@@ -48,6 +50,8 @@
     <PackageReference Include="Microsoft.ML" Version="4.0.2" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.0" />
     <PackageReference Include="Microsoft.ML.OnnxTransformer" Version="4.0.2" />
+    <PackageReference Include="SqlKata" Version="4.0.1" />
+    <PackageReference Include="SqlKata.Execution" Version="4.0.1" />
     <PackageReference Include="System.ComponentModel.Annotations" Version="5.0.0" />
   </ItemGroup>
 
