@@ -13,7 +13,7 @@ namespace SmartData.Core
         public bool EnableTimeseries { get; private set; }
         public bool EnableChangeTracking { get; private set; }
         public bool EnableIntegrityVerification { get; private set; }
-        public bool EnableCalculations { get; private set; }
+        public bool EnableAnalytics { get; private set; }
         public Action<DbContextOptionsBuilder> DbOptions { get; private set; }
 
         public DataOptions WithConnectionString(string connectionString)
@@ -64,9 +64,9 @@ namespace SmartData.Core
             return this;
         }
 
-        public DataOptions WithCalculations()
+        public DataOptions WithAnalytics()
         {
-            EnableCalculations = true;
+            EnableAnalytics = true;
             return this;
         }
     }

@@ -118,13 +118,13 @@ namespace SmartData.UnitTests
                 _dbContext.EnsureSchemaCreatedAsync().GetAwaiter().GetResult();
                 _logger.LogInformation("Schema creation completed.");
 
-                Assert.True(TableExists("sysEmbeddings"), "sysEmbeddings table was not created.");
-                Assert.True(TableExists("sysTimeseriesBaseValues"), "sysTimeseriesBaseValues table was not created.");
-                Assert.True(TableExists("sysTimeseriesDeltas"), "sysTimeseriesDeltas table was not created.");
-                Assert.True(TableExists("sysChangeLog"), "sysChangeLog table was not created.");
-                Assert.True(TableExists("sysIntegrityLog"), "sysIntegrityLog table was not created.");
-                Assert.True(TableExists("sysAnalytics"), "sysAnalytics table was not created.");
-                Assert.True(TableExists("sysAnalyticsSteps"), "sysAnalyticsSteps table was not created.");
+                Assert.True(TableExists("__sysEmbeddings"), "sysEmbeddings table was not created.");
+                Assert.True(TableExists("__sysTimeseriesBaseValues"), "sysTimeseriesBaseValues table was not created.");
+                Assert.True(TableExists("__sysTimeseriesDeltas"), "sysTimeseriesDeltas table was not created.");
+                Assert.True(TableExists("__sysChangeLog"), "sysChangeLog table was not created.");
+                Assert.True(TableExists("__sysIntegrityLog"), "sysIntegrityLog table was not created.");
+                Assert.True(TableExists("__sysAnalytics"), "sysAnalytics table was not created.");
+                Assert.True(TableExists("__sysAnalyticsSteps"), "sysAnalyticsSteps table was not created.");
 
                 _logger.LogInformation("Initializing DataService<Sensor>...");
                 _sensorService = new DataService<Sensor>(

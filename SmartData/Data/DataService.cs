@@ -733,8 +733,10 @@ namespace SmartData.Data
                         EntityId = entityId,
                         ChangedBy = changedBy,
                         ChangedAt = DateTime.UtcNow,
-                        OriginalValue = original != null ? JsonSerializer.Serialize(original) : null,
-                        NewValue = newValue != null ? JsonSerializer.Serialize(newValue) : null,
+                        //OriginalValue = original != null ? JsonSerializer.Serialize(original) : null,
+                        //NewValue = newValue != null ? JsonSerializer.Serialize(newValue) : null,
+                        OriginalValue = original != null ? ToAuditString(original, dbContext, property.Name) : null,
+                        NewValue = newValue != null ? ToAuditString(newValue, dbContext, property.Name) : null,
                         ChangeType = changeType,
                         PropertyName = property.Name
                     });
@@ -922,6 +924,27 @@ namespace SmartData.Data
         {
             using var sha256 = SHA256.Create();
             return Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(input)));
+        }
+
+        private string ToAuditString(object? clrValue, DataContext dbContext, string propertyName)
+        {
+            if (clrValue is null) return null;
+
+            var efEntity = dbContext.Model.FindEntityType(typeof(T));
+            var efProp = efEntity?.FindProperty(propertyName);
+
+            // Use the same converter EF uses for this property (e.g., your encryption converter)
+            var converter = efProp?.GetTypeMapping()?.Converter;
+
+            // If a converter exists, convert CLR -> Provider (encrypted string for your case)
+            if (converter != null)
+            {
+                var providerValue = converter.ConvertToProvider(clrValue);
+                return providerValue as string ?? System.Text.Json.JsonSerializer.Serialize(providerValue);
+            }
+
+            // No converter: keep existing behavior
+            return clrValue is string s ? s : System.Text.Json.JsonSerializer.Serialize(clrValue);
         }
 
         public void Dispose()

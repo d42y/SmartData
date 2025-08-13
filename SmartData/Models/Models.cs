@@ -118,8 +118,8 @@ namespace SmartData.Models
         public string ChangedBy { get; set; }
         public string PropertyName { get; set; }
         public DateTime ChangedAt { get; set; }
-        public string OriginalValue { get; set; }
-        public string NewValue { get; set; }
+        public string? OriginalValue { get; set; }
+        public string? NewValue { get; set; }
         public string ChangeType { get; set; }
     }
 

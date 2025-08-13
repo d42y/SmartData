@@ -32,7 +32,7 @@ namespace SmartData.Data
             _logger = logger;
             _logger?.LogInformation("DataContext instantiated with options: Embeddings={0}, Timeseries={1}, ChangeTracking={2}, IntegrityVerification={3}, Calculations={4}",
                 _options.EnableEmbeddings, _options.EnableTimeseries, _options.EnableChangeTracking,
-                _options.EnableIntegrityVerification, _options.EnableCalculations);
+                _options.EnableIntegrityVerification, _options.EnableAnalytics);
         }
 
         public DbSet<ChangeLogRecord> ChangeLogRecords { get; set; }
@@ -52,19 +52,19 @@ namespace SmartData.Data
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             _logger?.LogInformation("Configuring model for DataContext...");
-            modelBuilder.Entity<ChangeLogRecord>().ToTable("sysChangeLog");
-            modelBuilder.Entity<EmbeddingRecord>().ToTable("sysEmbeddings");
-            modelBuilder.Entity<TimeseriesBaseValue>().ToTable("sysTimeseriesBaseValues");
-            modelBuilder.Entity<TimeseriesDelta>().ToTable("sysTimeseriesDeltas");
-            modelBuilder.Entity<IntegrityLogRecord>().ToTable("sysIntegrityLog");
-            modelBuilder.Entity<Models.Analytics>().ToTable("sysAnalytics");
-            modelBuilder.Entity<AnalyticsStep>().ToTable("sysAnalyticsSteps");
+            modelBuilder.Entity<ChangeLogRecord>().ToTable("__sysChangeLog");
+            modelBuilder.Entity<EmbeddingRecord>().ToTable("__sysEmbeddings");
+            modelBuilder.Entity<TimeseriesBaseValue>().ToTable("__sysTimeseriesBaseValues");
+            modelBuilder.Entity<TimeseriesDelta>().ToTable("__sysTimeseriesDeltas");
+            modelBuilder.Entity<IntegrityLogRecord>().ToTable("__sysIntegrityLog");
+            modelBuilder.Entity<Models.Analytics>().ToTable("__sysAnalytics");
+            modelBuilder.Entity<AnalyticsStep>().ToTable("__sysAnalyticsSteps");
 
             if (_options.EnableEmbeddings)
             {
                 modelBuilder.Entity<EmbeddingRecord>(entity =>
                 {
-                    entity.ToTable("sysEmbeddings");
+                    entity.ToTable("__sysEmbeddings");
                     entity.HasKey(e => e.Id);
                     entity.Property(e => e.EntityId).IsRequired().HasMaxLength(128);
                     entity.Property(e => e.Embedding).IsRequired()
@@ -85,7 +85,7 @@ namespace SmartData.Data
             {
                 modelBuilder.Entity<TimeseriesBaseValue>(entity =>
                 {
-                    entity.ToTable("sysTimeseriesBaseValues");
+                    entity.ToTable("__sysTimeseriesBaseValues");
                     entity.HasKey(e => e.Id);
                     entity.Property(e => e.EntityId).IsRequired().HasMaxLength(128);
                     entity.Property(e => e.TableName).IsRequired().HasMaxLength(255);
@@ -97,7 +97,7 @@ namespace SmartData.Data
 
                 modelBuilder.Entity<TimeseriesDelta>(entity =>
                 {
-                    entity.ToTable("sysTimeseriesDeltas");
+                    entity.ToTable("__sysTimeseriesDeltas");
                     entity.HasKey(e => e.Id);
                     entity.Property(e => e.BaseValueId).IsRequired();
                     entity.Property(e => e.Deltas).IsRequired();
@@ -114,7 +114,7 @@ namespace SmartData.Data
             {
                 modelBuilder.Entity<ChangeLogRecord>(entity =>
                 {
-                    entity.ToTable("sysChangeLog");
+                    entity.ToTable("__sysChangeLog");
                     entity.HasKey(e => e.Id);
                     entity.Property(e => e.TableName).IsRequired().HasMaxLength(255);
                     entity.Property(e => e.EntityId).IsRequired().HasMaxLength(128);
@@ -132,7 +132,7 @@ namespace SmartData.Data
             {
                 modelBuilder.Entity<IntegrityLogRecord>(entity =>
                 {
-                    entity.ToTable("sysIntegrityLog");
+                    entity.ToTable("__sysIntegrityLog");
                     entity.HasKey(e => e.Id);
                     entity.Property(e => e.TableName).IsRequired().HasMaxLength(255);
                     entity.Property(e => e.EntityId).IsRequired().HasMaxLength(128);
@@ -145,11 +145,11 @@ namespace SmartData.Data
                 _logger?.LogInformation("Configured sysIntegrityLog table.");
             }
 
-            if (_options.EnableCalculations)
+            if (_options.EnableAnalytics)
             {
                 modelBuilder.Entity<Analytics>(entity =>
                 {
-                    entity.ToTable("sysAnalytics");
+                    entity.ToTable("__sysAnalytics");
                     entity.HasKey(e => e.Id);
                     entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
                     entity.Property(e => e.Value).HasMaxLength(4000);
@@ -159,7 +159,7 @@ namespace SmartData.Data
 
                 modelBuilder.Entity<AnalyticsStep>(entity =>
                 {
-                    entity.ToTable("sysAnalyticsSteps");
+                    entity.ToTable("__sysAnalyticsSteps");
                     entity.HasKey(e => e.Id);
                     entity.Property(e => e.AnalyticsId).IsRequired();
                     entity.Property(e => e.Order).IsRequired();
@@ -180,7 +180,7 @@ namespace SmartData.Data
                 var idProperty = entityType.GetProperties()
                     .FirstOrDefault(p => p.Name.Equals("Id", StringComparison.OrdinalIgnoreCase) ||
                                          p.GetCustomAttribute<KeyAttribute>() != null)
-                    ?? throw new InvalidOperationException($"Entity {entityType.Name} must have an Id property.");
+                ?? throw new InvalidOperationException($"Entity {entityType.Name} must have an Id property.");
                 entityBuilder.Property(idProperty.Name).ValueGeneratedOnAdd();
                 entityBuilder.HasKey(idProperty.Name);
 

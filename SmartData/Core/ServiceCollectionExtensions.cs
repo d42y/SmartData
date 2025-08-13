@@ -2,51 +2,69 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SmartData.AnalyticsService;
+using SmartData.Core;
+using SmartData.Core.Queue;
 using SmartData.Data;
 using SmartData.Vectorizer;
 
-namespace SmartData.Core
+public static class ServiceCollectionExtensions
 {
-    public static class ServiceCollectionExtensions
+    public static IServiceCollection AddSmartData<TContext>(
+        this IServiceCollection services,
+        Action<DataOptions> configure,
+        Action<DbContextOptionsBuilder>? dbOptions = null)
+        where TContext : DataContext
     {
-        public static IServiceCollection AddSmartData<TContext>(this IServiceCollection services, Action<DataOptions> configure, Action<DbContextOptionsBuilder> dbOptions = null)
-            where TContext : DataContext
+        var options = new DataOptions();
+        configure(options);
+        if (string.IsNullOrEmpty(options.ConnectionString))
+            throw new InvalidOperationException("Connection string is required.");
+
+        if (dbOptions != null)
+            options.WithDbOptions(dbOptions);
+
+        services.AddSingleton(options);
+
+        
+
+        // Core deps
+        services.AddSingleton<IEventBus, InMemoryEventBus>();
+        if (options.EnableEmbeddings)
         {
-            var options = new DataOptions();
-            configure(options);
-
-            if (string.IsNullOrEmpty(options.ConnectionString))
-                throw new InvalidOperationException("Connection string is required.");
-
-            if (dbOptions != null)
-                options.WithDbOptions(dbOptions);
-
-            services.AddDbContext<TContext>((sp, opt) =>
-            {
-                options.DbOptions?.Invoke(opt);
-                if (options.LoggerFactory != null)
-                    opt.UseLoggerFactory(options.LoggerFactory);
-            }, ServiceLifetime.Scoped);
-
-            services.AddScoped<DataContext>(sp =>
-            {
-                var context = sp.GetRequiredService<TContext>();
-                return context;
-            });
-
-            services.AddScoped<ILogger<DataContext>>(sp => sp.GetRequiredService<ILoggerFactory>().CreateLogger<DataContext>());
-            services.AddSingleton(options);
-            services.AddSingleton<IEventBus, InMemoryEventBus>(); // Register event bus
-
-            if (options.EnableEmbeddings)
-                services.AddSingleton<IEmbeddingProvider, AllMiniLmL6V2Embedder>();
-
-            if (options.EnableCalculations)
-                services.AddScoped<SmartAnalyticsService>();
-
-            services.AddScoped(typeof(DataService<>));
-            services.AddScoped<FaissSearch>();
-            return services;
+            services.AddSingleton<IEmbeddingProvider, AllMiniLmL6V2Embedder>();
+            services.AddSingleton<IFaissSearch, FaissSearch>(); // share index
         }
+
+        if (options.EnableAnalytics)
+            services.AddHostedService<SmartAnalyticsService>();
+
+        services.AddScoped<SmartDataWriteInterceptor>();
+        services.AddSingleton<ISmartDataQueue, SmartDataQueue>();
+        services.AddSingleton(new SmartDataProcessingOptions { DegreeOfParallelism = Math.Max(2, Environment.ProcessorCount / 2) });
+        // Hosted background processor (runs integrity/timeseries/embeddings/change logs)
+        services.AddHostedService<SmartDataBackgroundProcessor>();
+        
+
+        // Register DbContext (do this here OR in Program.cs, not both)
+        services.AddDbContext<TContext>((sp, opt) =>
+        {
+            options.DbOptions?.Invoke(opt); // e.g., UseSqlServer(options.ConnectionString)
+            if (options.LoggerFactory != null)
+                opt.UseLoggerFactory(options.LoggerFactory);
+
+            var interceptor = sp.GetRequiredService<SmartDataWriteInterceptor>();
+            opt.AddInterceptors(interceptor);
+        });
+
+        // Alias base type to concrete
+        services.AddScoped<DataContext>(sp => sp.GetRequiredService<TContext>());
+
+        // Optional logger for DataContext
+        services.AddScoped<ILogger<DataContext>>(sp =>
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<DataContext>());
+
+        // Remove: services.AddScoped(typeof(DataService<>)); // needs a factory (tableName)
+
+        return services;
     }
 }

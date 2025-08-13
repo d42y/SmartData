@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartData", "SmartData\Smar
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartData.UnitTests", "SmartData.UnitTests\SmartData.UnitTests.csproj", "{47902F45-08FB-427C-B32F-BE977EF68AC1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartBuildingDemo", "SmartBuildingDemo\SmartBuildingDemo.csproj", "{4EB07E65-2786-4975-8300-DBB58719263A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4EB07E65-2786-4975-8300-DBB58719263A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4EB07E65-2786-4975-8300-DBB58719263A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4EB07E65-2786-4975-8300-DBB58719263A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4EB07E65-2786-4975-8300-DBB58719263A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

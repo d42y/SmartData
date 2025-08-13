@@ -165,7 +165,7 @@ namespace SmartData.AnalyticsService
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            if (!_options.EnableCalculations) return;
+            if (!_options.EnableAnalytics) return;
 
             using var scope = _serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
@@ -618,18 +618,7 @@ namespace SmartData.AnalyticsService
                     return false;
                 }
 
-                //// Simulate execution to check for single-value output in the last step
-                //if (/* is last step */)
-                //{
-                //    using var scope = _serviceProvider.CreateScope();
-                //    var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
-                //    var results = await dbContext.ExecuteSqlQueryAsync(sqlQuery, new object[] { });
-                //    if (results.Count > 1 || (results.Any() && results.First().Data.Count > 1))
-                //    {
-                //        error = "Last SQL query step must return a single value.";
-                //        return false;
-                //    }
-                //}
+                
 
                 error = null;
                 return true;
@@ -764,279 +753,6 @@ namespace SmartData.AnalyticsService
             _analyticsTriggers.TryRemove(analyticId, out _);
             _lastRunTimes.TryRemove(analyticId, out _);
         }
-
-
-        //private bool ValidateCSharpScript(string script, out string error, HashSet<string> availableVariables)
-        //{
-        //    try
-        //    {
-        //        var syntaxTree = CSharpSyntaxTree.ParseText(script);
-        //        var root = syntaxTree.GetRoot();
-        //        var dangerousNamespaces = new[] { "System.IO", "System.Net", "System.Reflection", "System.Threading", "System.Diagnostics" };
-        //        var hasDangerousCalls = root.DescendantNodes()
-        //            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax>()
-        //            .Any(n => dangerousNamespaces.Any(ns => n.ToString().StartsWith(ns, StringComparison.OrdinalIgnoreCase)));
-
-        //        if (hasDangerousCalls)
-        //        {
-        //            error = "Script contains prohibited namespace usage (e.g., System.IO, System.Net).";
-        //            return false;
-        //        }
-
-        //        // Check for variable references in the script
-        //        var variableReferences = root.DescendantNodes()
-        //            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax>()
-        //            .Select(n => n.Identifier.Text)
-        //            .Where(n => n != "context" && !n.StartsWith("@") && availableVariables != null && !availableVariables.Contains(n))
-        //            .Distinct()
-        //            .ToList();
-
-        //        if (variableReferences.Any())
-        //        {
-        //            error = $"Script references undefined variables: {string.Join(", ", variableReferences)}.";
-        //            return false;
-        //        }
-
-        //        error = null;
-        //        return true;
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        error = $"Invalid C# script: {ex.Message}";
-        //        return false;
-        //    }
-        //}
-
-        //public async Task<(bool IsValid, List<string> Errors)> VerifyAnalyticsAsync(Guid analyticId, AnalyticsConfig config = null, CancellationToken ct = default)
-        //{
-        //    var errors = new List<string>();
-        //    using var scope = _serviceProvider.CreateScope();
-        //    var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
-
-        //    Analytics analytic = null;
-        //    List<AnalyticsStep> steps;
-
-        //    if (config == null)
-        //    {
-        //        analytic = await dbContext.Set<Analytics>().FirstOrDefaultAsync(c => c.Id == analyticId, ct);
-        //        if (analytic == null)
-        //        {
-        //            errors.Add($"Analytics {analyticId} does not exist.");
-        //            return (false, errors);
-        //        }
-        //        steps = await dbContext.Set<AnalyticsStep>()
-        //            .Where(s => s.AnalyticsId == analyticId)
-        //            .OrderBy(s => s.Order)
-        //            .ToListAsync(ct);
-        //    }
-        //    else
-        //    {
-        //        analytic = new Analytics { Id = config.Id == Guid.Empty ? Guid.NewGuid() : config.Id };
-        //        steps = config.Steps.Select((step, i) => new AnalyticsStep
-        //        {
-        //            Id = Guid.NewGuid(),
-        //            AnalyticsId = analytic.Id,
-        //            Order = i + 1,
-        //            Operation = step.Type.ToString(),
-        //            Expression = step.Config,
-        //            ResultVariable = step.OutputVariable,
-        //            MaxLoop = step.Type == AnalyticsStepType.Condition ? step.MaxLoop : 10
-        //        }).ToList();
-        //    }
-
-        //    if (!steps.Any())
-        //    {
-        //        errors.Add("Analytics must have at least one step.");
-        //        if (config == null)
-        //        {
-        //            analytic.Status = $"Validation Failed: Analytics must have at least one step.";
-        //            await dbContext.SaveChangesAsync(ct);
-        //        }
-        //        return (false, errors);
-        //    }
-
-        //    var tableNames = GetTables(dbContext);
-        //    var variables = new HashSet<string>();
-        //    var reachableSteps = new HashSet<int>();
-        //    var simulatedContext = new Dictionary<string, object>();
-
-        //    for (int i = 0; i < steps.Count; i++)
-        //    {
-        //        var step = steps[i];
-        //        reachableSteps.Add(i + 1);
-
-        //        if (step.Order != i + 1)
-        //            errors.Add($"Step {i + 1} has incorrect order {step.Order}.");
-
-        //        if (!Enum.TryParse<AnalyticsStepType>(step.Operation, true, out var stepType))
-        //            errors.Add($"Step {step.Order}: Invalid step type {step.Operation}.");
-
-        //        var matches = Regex.Matches(step.Expression, @"\{([^{}]+)\}");
-        //        foreach (Match match in matches)
-        //        {
-        //            var varName = match.Groups[1].Value;
-        //            if (!variables.Contains(varName) && i > 0)
-        //                errors.Add($"Step {step.Order}: Unknown variable {varName}.");
-        //        }
-
-        //        if (!string.IsNullOrEmpty(step.ResultVariable) && stepType != AnalyticsStepType.Condition)
-        //        {
-        //            var indexMatch = Regex.Match(step.ResultVariable, @"^(\w+)\[(\d+)\]$");
-        //            if (indexMatch.Success)
-        //            {
-        //                var arrayName = indexMatch.Groups[1].Value;
-        //                if (i > 0 && !variables.Contains(arrayName))
-        //                    errors.Add($"Step {step.Order}: Array {arrayName} must be defined before index access.");
-        //            }
-        //        }
-
-        //        switch (stepType)
-        //        {
-        //            case AnalyticsStepType.SqlQuery:
-        //                if (!ValidateSqlQuery(step.Expression, out var sqlError))
-        //                    errors.Add($"Step {step.Order}: {sqlError}");
-        //                var tablesAndProperties = ExtractTableAndProperties(step.Expression);
-        //                foreach (var (table, property) in tablesAndProperties)
-        //                {
-        //                    if (!tableNames.Contains(table))
-        //                        errors.Add($"Step {step.Order}: Invalid table reference {table}.");
-        //                    var entityType = dbContext.Model.GetEntityTypes()
-        //                        .FirstOrDefault(t => t.GetTableName().Equals(table, StringComparison.OrdinalIgnoreCase))
-        //                        ?.ClrType;
-        //                    if (entityType != null)
-        //                    {
-        //                        var prop = entityType.GetProperty(property, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-        //                        if (prop == null)
-        //                            errors.Add($"Step {step.Order}: Property {property} does not exist on table {table}.");
-        //                    }
-        //                }
-        //                if (i == steps.Count - 1 && !Regex.IsMatch(step.Expression, @"SELECT\s+(AVG|SUM|COUNT|MIN|MAX)\s*\(", RegexOptions.IgnoreCase))
-        //                    errors.Add($"Step {step.Order}: Last SqlQuery step must return a single value (e.g., use AVG, SUM, COUNT, MAX).");
-        //                break;
-
-        //            case AnalyticsStepType.Timeseries:
-        //                if (!ValidateTimeseriesExpression(step.Expression, out var timeseriesError))
-        //                    errors.Add($"Step {step.Order}: {timeseriesError}");
-        //                var timeseriesTables = ExtractTableAndProperties(step.Expression);
-        //                foreach (var (table, _) in timeseriesTables)
-        //                    if (!tableNames.Contains(table))
-        //                        errors.Add($"Step {step.Order}: Invalid table reference {table} in timeseries expression.");
-        //                if (i == steps.Count - 1 && string.IsNullOrEmpty(step.ResultVariable))
-        //                    errors.Add($"Step {step.Order}: Last Timeseries step must have a ResultVariable.");
-        //                break;
-
-        //            case AnalyticsStepType.CSharp:
-        //            case AnalyticsStepType.Variable:
-        //                if (!ValidateCSharpScript(step.Expression, out var scriptError, variables))
-        //                    errors.Add($"Step {step.Order}: {scriptError}");
-        //                else
-        //                {
-        //                    try
-        //                    {
-        //                        // Initialize context with dummy values for known variables to prevent null references
-        //                        var tempContext = new Dictionary<string, object>(simulatedContext);
-        //                        foreach (var varName in variables)
-        //                        {
-        //                            if (!tempContext.ContainsKey(varName))
-        //                            {
-        //                                // Assume scalar or list based on ResultVariable pattern
-        //                                var indexMatch = Regex.Match(step.ResultVariable ?? "", @"^(\w+)\[\d+\]$");
-        //                                if (indexMatch.Success && indexMatch.Groups[1].Value == varName)
-        //                                    tempContext[varName] = new List<object> { 0 }; // Initialize as list
-        //                                else
-        //                                    tempContext[varName] = 0; // Initialize as scalar
-        //                            }
-        //                        }
-        //                        var globals = new ScriptGlobals { Context = tempContext };
-        //                        _logger?.LogDebug("Evaluating C# script for step {StepOrder}: {Script}, Context: {ContextKeys}", step.Order, step.Expression, string.Join(", ", tempContext.Keys));
-        //                        var scriptState = await CSharpScript.EvaluateAsync(step.Expression, _scriptOptions, globals);
-        //                        _logger?.LogDebug("C# script evaluation for step {StepOrder} returned: {Result}", step.Order, scriptState?.ToString() ?? "null");
-        //                    }
-        //                    catch (CompilationErrorException ex)
-        //                    {
-        //                        errors.Add($"Step {step.Order}: Invalid {stepType} script: {ex.Message}");
-        //                    }
-        //                    catch (Exception ex)
-        //                    {
-        //                        errors.Add($"Step {step.Order}: Script execution failed: {ex.Message}");
-        //                    }
-        //                }
-        //                if (i == steps.Count - 1 && string.IsNullOrEmpty(step.ResultVariable))
-        //                    errors.Add($"Step {step.Order}: Last {stepType} step must have a ResultVariable.");
-        //                break;
-
-        //            case AnalyticsStepType.Condition:
-        //                if (!ValidateCSharpScript(step.Expression, out var conditionScriptError, variables))
-        //                    errors.Add($"Step {step.Order}: {conditionScriptError}");
-        //                else
-        //                {
-        //                    try
-        //                    {
-        //                        var tempContext = new Dictionary<string, object>(simulatedContext);
-        //                        foreach (var varName in variables)
-        //                        {
-        //                            if (!tempContext.ContainsKey(varName))
-        //                            {
-        //                                tempContext[varName] = 0; // Initialize with default value
-        //                            }
-        //                        }
-        //                        var globals = new ScriptGlobals { Context = tempContext };
-        //                        var scriptState = await CSharpScript.EvaluateAsync(step.Expression, _scriptOptions, globals);
-        //                        if (scriptState is not bool)
-        //                            errors.Add($"Step {step.Order}: Condition script must return a boolean value.");
-        //                    }
-        //                    catch (CompilationErrorException ex)
-        //                    {
-        //                        errors.Add($"Step {step.Order}: Invalid condition script: {ex.Message}");
-        //                    }
-        //                    catch (Exception ex)
-        //                    {
-        //                        errors.Add($"Step {step.Order}: Condition script execution failed: {ex.Message}");
-        //                    }
-        //                }
-        //                if (!int.TryParse(step.ResultVariable, out var goToStep) || goToStep < 1 || goToStep > steps.Count || goToStep == i + 1)
-        //                    errors.Add($"Step {step.Order}: Invalid GoTo step number {step.ResultVariable}. Must be between 1 and {steps.Count}, not current step.");
-        //                else
-        //                    reachableSteps.Add(goToStep);
-        //                if (step.MaxLoop <= 0)
-        //                    errors.Add($"Step {step.Order}: MaxLoop must be positive.");
-        //                break;
-        //        }
-
-        //        if (stepType != AnalyticsStepType.Condition && !string.IsNullOrEmpty(step.ResultVariable))
-        //        {
-        //            var indexMatch = Regex.Match(step.ResultVariable, @"^(\w+)\[(\d+)\]$");
-        //            var varName = indexMatch.Success ? indexMatch.Groups[1].Value : step.ResultVariable;
-        //            variables.Add(varName);
-        //            if (!simulatedContext.ContainsKey(varName))
-        //            {
-        //                if (indexMatch.Success)
-        //                    simulatedContext[varName] = new List<object> { 0 }; // Initialize as list for array access
-        //                else
-        //                    simulatedContext[varName] = 0; // Initialize with default scalar value
-        //            }
-        //        }
-        //    }
-
-        //    for (int i = 1; i <= steps.Count; i++)
-        //    {
-        //        if (!reachableSteps.Contains(i))
-        //            errors.Add($"Step {i}: Unreachable due to loop configuration.");
-        //    }
-
-        //    if (errors.Any() && config == null)
-        //    {
-        //        analytic.Status = $"Validation Failed: {string.Join("; ", errors)}";
-        //        await dbContext.SaveChangesAsync(ct);
-        //    }
-        //    else if (config == null)
-        //    {
-        //        analytic.Status = "OK";
-        //        await dbContext.SaveChangesAsync(ct);
-        //    }
-
-        //    return (errors.Count == 0, errors);
-        //}
 
         public async Task<(bool IsValid, List<string> Errors)> VerifyAnalyticsAsync(Guid analyticId, AnalyticsConfig config = null, CancellationToken ct = default)
         {
@@ -1295,13 +1011,13 @@ namespace SmartData.AnalyticsService
         {
             var systemTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "sysChangeLog",
-                "sysEmbeddings",
-                "sysTimeseriesBaseValues",
-                "sysTimeseriesDeltas",
-                "sysIntegrityLog",
-                "sysAnalytics",
-                "sysAnalyticsSteps"
+                "__sysChangeLog",
+                "__sysEmbeddings",
+                "__sysTimeseriesBaseValues",
+                "__sysTimeseriesDeltas",
+                "__sysIntegrityLog",
+                "__sysAnalytics",
+                "__sysAnalyticsSteps"
             };
 
             var tableNames = dbContext.Model.GetEntityTypes()
