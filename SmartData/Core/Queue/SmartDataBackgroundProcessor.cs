@@ -1,10 +1,5 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System.Collections.Concurrent;
 using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -70,7 +65,7 @@ namespace SmartData.Core.Queue
                 {
                     using var scope = _sp.CreateScope();
                     var db = scope.ServiceProvider.GetRequiredService<DataContext>();
-
+                    
                     // CHANGE LOG
                     if (_options.EnableChangeTracking && item.Changes.Count > 0)
                     {
@@ -201,6 +196,7 @@ namespace SmartData.Core.Queue
                             }
                         }
                     }
+
 
                     await db.SaveChangesAsync(ct);
                 }

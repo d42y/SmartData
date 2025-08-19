@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-    <Version>0.0.6</Version>
+    <Version>0.0.7</Version>
     <PackageId>d42y.SmartData</PackageId>
     <Description>.NET library by d42y for IoT data management with relational, embedding, and timeseries support, enabling GPT-based QA and analytics via RAG.</Description>
     <Authors>d42y</Authors>
@@ -46,6 +46,7 @@
 
   <ItemGroup>
     <PackageReference Include="FaissNet" Version="1.1.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Http" Version="2.3.0" />
     <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.8.0" />

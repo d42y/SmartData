@@ -42,6 +42,9 @@ namespace SmartData.Data
         public DbSet<IntegrityLogRecord> IntegrityLogRecords { get; set; }
         public DbSet<SmartData.Models.Analytics> Analytics { get; set; }
         public DbSet<AnalyticsStep> AnalyticsSteps { get; set; }
+        public DbSet<AnalyticsBinding> AnalyticsBindings { get; set; }
+        public DbSet<AnalyticsRun> AnalyticsRuns { get; set; }
+        public DbSet<AnalyticsTrigger> AnalyticsTriggers { get; set; }
 
         public void RegisterEntity(Type entityType, string tableName)
         {
@@ -59,6 +62,9 @@ namespace SmartData.Data
             modelBuilder.Entity<IntegrityLogRecord>().ToTable("__sysIntegrityLog");
             modelBuilder.Entity<Models.Analytics>().ToTable("__sysAnalytics");
             modelBuilder.Entity<AnalyticsStep>().ToTable("__sysAnalyticsSteps");
+            modelBuilder.Entity<AnalyticsBinding>().ToTable("__sysAnalyticsBindings");
+            modelBuilder.Entity<AnalyticsRun>().ToTable("__sysAnalyticsRuns");
+            modelBuilder.Entity<AnalyticsTrigger>().ToTable("__sysAnalyticsTriggers");
 
             if (_options.EnableEmbeddings)
             {
@@ -151,10 +157,16 @@ namespace SmartData.Data
                 {
                     entity.ToTable("__sysAnalytics");
                     entity.HasKey(e => e.Id);
+                    entity.Property(e => e.TenantId).IsRequired();                 
+                    entity.Property(e => e.Enabled).IsRequired().HasDefaultValue(true); 
+                    entity.Property(e => e.OutputMode).IsRequired().HasMaxLength(16).HasDefaultValue("Memory"); // NEW
+                    entity.Property(e => e.OutputTable).HasMaxLength(128);         
+                    entity.Property(e => e.NextRun).IsRequired(false);            
+
                     entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
                     entity.Property(e => e.Value).HasMaxLength(4000);
                     entity.Property(e => e.Status).HasMaxLength(4000).IsRequired(false);
-                    entity.HasIndex(e => e.Name).IsUnique();
+                    entity.HasIndex(e => new { e.TenantId, e.Name }).IsUnique(); // tenant-scoped uniqueness
                 });
 
                 modelBuilder.Entity<AnalyticsStep>(entity =>
@@ -171,6 +183,45 @@ namespace SmartData.Data
                     entity.HasOne<Analytics>().WithMany()
                         .HasForeignKey(e => e.AnalyticsId).OnDelete(DeleteBehavior.Cascade);
                 });
+
+                modelBuilder.Entity<AnalyticsBinding>(entity =>
+                {
+                    entity.ToTable("__sysAnalyticsBindings");
+                    entity.HasKey(e => new { e.TenantId, e.NodeId, e.AnalyticsId });
+                    entity.Property(e => e.Enabled).IsRequired().HasDefaultValue(true);
+                    entity.HasIndex(e => new { e.TenantId, e.AnalyticsId });
+                });
+
+                modelBuilder.Entity<AnalyticsRun>(entity =>
+                {
+                    entity.ToTable("__sysAnalyticsRuns");
+                    entity.HasKey(e => e.Id);
+                    entity.Property(e => e.TenantId).IsRequired();
+                    entity.Property(e => e.AnalyticsId).IsRequired();
+                    entity.Property(e => e.Status).IsRequired().HasMaxLength(32);
+                    entity.Property(e => e.Error).HasMaxLength(2000);
+                    entity.Property(e => e.StartedAt).IsRequired();
+                    entity.Property(e => e.FinishedAt);
+                    entity.HasIndex(e => new { e.TenantId, e.AnalyticsId, e.StartedAt });
+                });
+
+                modelBuilder.Entity<AnalyticsTrigger>(entity =>
+                {
+                    entity.ToTable("__sysAnalyticsTriggers");
+                    entity.HasKey(e => e.Id);
+                    entity.Property(e => e.AnalyticsId).IsRequired();
+                    entity.Property(e => e.TableName).IsRequired().HasMaxLength(255);
+                    entity.Property(e => e.PropertyName).IsRequired().HasMaxLength(128);
+                    entity.Property(e => e.EntityId).HasMaxLength(128);
+                    entity.Property(e => e.ChangeType).HasMaxLength(50);
+
+                    entity.HasIndex(e => e.AnalyticsId);
+                    entity.HasIndex(e => new { e.TableName, e.PropertyName });
+                    entity.HasOne<Analytics>().WithMany()
+                          .HasForeignKey(e => e.AnalyticsId)
+                          .OnDelete(DeleteBehavior.Cascade);
+                });
+
                 _logger?.LogInformation("Configured sysAnalytics and sysAnalyticsSteps tables.");
             }
 

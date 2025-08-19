@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using SmartData.AnalyticsService;
 using System.Reflection;
 
 namespace SmartData.Core
@@ -15,6 +16,7 @@ namespace SmartData.Core
         public bool EnableIntegrityVerification { get; private set; }
         public bool EnableAnalytics { get; private set; }
         public Action<DbContextOptionsBuilder> DbOptions { get; private set; }
+        public AnalyticsOptions Analytics { get; } = new();
 
         public DataOptions WithConnectionString(string connectionString)
         {
@@ -64,9 +66,15 @@ namespace SmartData.Core
             return this;
         }
 
-        public DataOptions WithAnalytics()
+        /// <summary>
+        /// Enable analytics and configure scope/output persistence.
+        /// </summary>
+        public DataOptions WithAnalytics(string scopeTable, string? outputTable = null)
         {
             EnableAnalytics = true;
+            Analytics.ScopeTable = scopeTable;
+            Analytics.OutputTable = outputTable;
+            Analytics.DefaultOutputMode = outputTable is null ? "Memory" : "Table";
             return this;
         }
     }

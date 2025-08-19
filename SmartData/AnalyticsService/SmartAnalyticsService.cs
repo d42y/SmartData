@@ -6,23 +6,23 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.ML;
-using SmartData.Core;
-using SmartData.Data;
-using SmartData.Models;
 using SqlKata;
 using SqlKata.Compilers;
 using System.Collections.Concurrent;
-using System.Dynamic;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Linq;
+using SmartData.Core;
+using SmartData.Data;
+using SmartData.Models;
 
 namespace SmartData.AnalyticsService
 {
     public class ScriptGlobals
     {
-        public Dictionary<string, object> Context { get; set; }
+        public Dictionary<string, object> Context { get; set; } = new();
+        // alias for convenience in scripts
         public Dictionary<string, object> context
         {
             get => Context;
@@ -42,302 +42,340 @@ namespace SmartData.AnalyticsService
     public class AnalyticsStepConfig
     {
         public AnalyticsStepType Type { get; set; }
-        public string Config { get; set; }
-        public string OutputVariable { get; set; }
+        public string Config { get; set; } = string.Empty;
+        public string OutputVariable { get; set; } = string.Empty;
         public int MaxLoop { get; set; } = 10;
     }
 
     public class AnalyticsConfig
     {
         public Guid Id { get; set; }
-        public string Name { get; set; }
+        public string Name { get; set; } = string.Empty;
         public int Interval { get; set; }
-        public bool Embeddable { get; set; }
         public List<AnalyticsStepConfig> Steps { get; set; } = new();
     }
 
+    /// <summary>
+    /// SmartAnalyticsService:
+    /// - Timer loop for Interval > 0 analytics
+    /// - ChangeLog-trigger loop driven by explicit triggers in __sysAnalyticsTriggers
+    /// - Idle/backoff if nothing is configured
+    /// </summary>
     public class SmartAnalyticsService : BackgroundService
     {
+        public readonly record struct ExecResult(string Final, IReadOnlyDictionary<string, object> Vars);
+
         private readonly IServiceProvider _serviceProvider;
         private readonly DataOptions _options;
-        private readonly ILogger<SmartAnalyticsService> _logger;
-        private readonly IEventBus _eventBus;
+        private readonly ILogger<SmartAnalyticsService>? _logger;
+
         private readonly ScriptOptions _scriptOptions;
         private readonly Compiler _sqlCompiler;
-        private readonly ConcurrentDictionary<Guid, HashSet<(string Table, string Property)>> _analyticsTriggers;
-        private readonly ConcurrentDictionary<Guid, DateTime> _lastRunTimes; // Track last run time
-        private readonly TimeSpan _minimumRunInterval = TimeSpan.FromSeconds(10); // 10-second minimum interval
+
+        // Per-analytic guard to avoid hyper-frequency
+        private readonly ConcurrentDictionary<Guid, DateTime> _lastRunTimes = new();
+        private readonly TimeSpan _minimumRunInterval = TimeSpan.FromSeconds(10);
+
+        // ChangeLog polling watermark (per analytic)
+        private readonly ConcurrentDictionary<Guid, DateTime> _clWatermark = new();
+        private readonly TimeSpan _changePollInterval = TimeSpan.FromSeconds(3);
+
+        // Global DB concurrency gate to avoid pool exhaustion
+        private static readonly int _maxConcurrentDb = Math.Max(4, Environment.ProcessorCount);
+        private static readonly SemaphoreSlim _dbGate = new(_maxConcurrentDb, _maxConcurrentDb);
+
+        private static readonly ConcurrentDictionary<(Guid StepId, string Expr), ScriptRunner<object?>> _scriptCache = new();
 
         public SmartAnalyticsService(
             IServiceProvider serviceProvider,
             DataOptions options,
-            IEventBus eventBus,
-            ILogger<SmartAnalyticsService> logger = null)
+            ILogger<SmartAnalyticsService>? logger = null)
         {
             _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
             _options = options ?? throw new ArgumentNullException(nameof(options));
-            _eventBus = eventBus ?? throw new ArgumentNullException(nameof(eventBus));
             _logger = logger;
-            _analyticsTriggers = new ConcurrentDictionary<Guid, HashSet<(string, string)>>();
-            _lastRunTimes = new ConcurrentDictionary<Guid, DateTime>();
+
             _scriptOptions = ScriptOptions.Default
-                .WithReferences(typeof(List<>).Assembly, typeof(System.Linq.Enumerable).Assembly, typeof(SmartAnalyticsService).Assembly)
-                .WithImports("System.Collections.Generic", "System.Linq", "SmartData.AnalyticsService");
+                .WithReferences(typeof(List<>).Assembly,
+                                typeof(Enumerable).Assembly,
+                                typeof(SmartAnalyticsService).Assembly)
+                .WithImports("System",
+                             "System.Collections.Generic",
+                             "System.Linq",
+                             "SmartData.AnalyticsService");
+
             _sqlCompiler = new SqlServerCompiler();
-
-            // Subscribe to entity change events
-            _eventBus.Subscribe(async changeEvent => await HandleEntityChangeAsync(changeEvent));
         }
 
-        private async Task HandleEntityChangeAsync(EntityChangeEvent changeEvent)
-        {
-            try
-            {
-                using var scope = _serviceProvider.CreateScope();
-                var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
-                var analytics = await dbContext.Set<Analytics>()
-                    .Where(a => a.Interval < 0)
-                    .ToListAsync();
-
-                foreach (var analytic in analytics)
-                {
-                    // Check if enough time has elapsed since last run
-                    if (_lastRunTimes.TryGetValue(analytic.Id, out var lastRun) &&
-                        (DateTime.UtcNow - lastRun) < _minimumRunInterval)
-                    {
-                        _logger?.LogDebug("Skipping analytics {AnalyticsName} due to minimum run interval not met", analytic.Name);
-                        continue;
-                    }
-
-                    if (_analyticsTriggers.TryGetValue(analytic.Id, out var triggers))
-                    {
-                        bool shouldRun = changeEvent.Operation == EntityOperation.Update
-                            ? triggers.Any(t => t.Table.Equals(changeEvent.TableName, StringComparison.OrdinalIgnoreCase) &&
-                                               changeEvent.ChangedProperties.ContainsKey(t.Property))
-                            : triggers.Any(t => t.Table.Equals(changeEvent.TableName, StringComparison.OrdinalIgnoreCase));
-
-                        if (shouldRun)
-                        {
-                            try
-                            {
-                                var oldValue = analytic.Value;
-                                analytic.Value = await RunAnalyticsAsync(analytic, dbContext, CancellationToken.None);
-                                analytic.LastRun = DateTime.UtcNow;
-                                analytic.Status = "OK"; // Set status to OK on success
-                                _lastRunTimes[analytic.Id] = DateTime.UtcNow;
-
-                                await dbContext.SaveChangesAsync();
-
-                                if (_options.EnableChangeTracking && oldValue != analytic.Value)
-                                {
-                                    await dbContext.AddAsync(new ChangeLogRecord
-                                    {
-                                        Id = Guid.NewGuid(),
-                                        TableName = "sysAnalytics",
-                                        EntityId = analytic.Id.ToString(),
-                                        ChangedBy = "System",
-                                        ChangedAt = DateTime.UtcNow,
-                                        OriginalValue = oldValue,
-                                        NewValue = analytic.Value,
-                                        ChangeType = "Update",
-                                        PropertyName = "Value"
-                                    });
-                                    await dbContext.SaveChangesAsync();
-                                }
-                                _logger?.LogInformation("Triggered analytics {AnalyticsName} due to {Operation} on {TableName}",
-                                    analytic.Name, changeEvent.Operation, changeEvent.TableName);
-                            }
-                            catch (Exception ex)
-                            {
-                                analytic.Status = $"Runtime Error: {ex.Message}";
-                                await dbContext.SaveChangesAsync();
-                                _logger?.LogError(ex, "Error running analytics {AnalyticsName}", analytic.Name);
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Error handling entity change event for {TableName}", changeEvent.TableName);
-            }
-        }
-
+        // ======================= Main =======================
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             if (!_options.EnableAnalytics) return;
 
-            using var scope = _serviceProvider.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
-            var analytics = await dbContext.Set<Analytics>().ToListAsync(stoppingToken);
-            foreach (var analytic in analytics)
-            {
-                await UpdateAnalyticsTriggersAsync(analytic.Id, dbContext);
-            }
+            var timerLoop = TimerLoopAsync(stoppingToken);
+            var changeLoop = ChangeLogLoopAsync(stoppingToken);
+            await Task.WhenAll(timerLoop, changeLoop);
+        }
 
-            while (!stoppingToken.IsCancellationRequested)
+        // ======================= Timer analytics loop =======================
+        private async Task TimerLoopAsync(CancellationToken ct)
+        {
+            int idleBackoffSeconds = 5;
+
+            while (!ct.IsCancellationRequested)
             {
                 try
                 {
-                    var timeBasedAnalytics = await dbContext.Set<Analytics>()
-                        .Where(a => a.Interval > 0)
-                        .ToListAsync(stoppingToken);
-
-                    foreach (var analytic in timeBasedAnalytics)
+                    await _dbGate.WaitAsync(ct);
+                    try
                     {
-                        if (await ShouldRunAsync(analytic, dbContext, stoppingToken))
+                        using var scope = _serviceProvider.CreateScope();
+                        var db = scope.ServiceProvider.GetRequiredService<DataContext>();
+
+                        // Early check to idle when nothing exists
+                        bool anyTimer = await db.Set<Analytics>()
+                                                .AsNoTracking()
+                                                .AnyAsync(a => a.Interval > 0, ct);
+                        if (!anyTimer)
                         {
-                            try
+                            idleBackoffSeconds = Math.Min(60, idleBackoffSeconds * 2);
+                            try { await Task.Delay(TimeSpan.FromSeconds(idleBackoffSeconds), ct); } catch { }
+                            continue;
+                        }
+                        idleBackoffSeconds = 5;
+
+                        var list = await db.Set<Analytics>()
+                                           .AsNoTracking()
+                                           .Where(a => a.Interval > 0)
+                                           .ToListAsync(ct);
+
+                        foreach (var analytic in list)
+                        {
+                            if (!await ShouldRunAsync(analytic, ct)) continue;
+
+                            // use a write scope/context
+                            using var wscope = _serviceProvider.CreateScope();
+                            var wdb = wscope.ServiceProvider.GetRequiredService<DataContext>();
+                            var tracked = await wdb.Set<Analytics>().FirstAsync(a => a.Id == analytic.Id, ct);
+
+                            var oldValue = tracked.Value;
+                            var exec = await RunAnalyticsAsync(tracked, wdb, ct);
+
+                            tracked.Value = exec.Final;
+                            tracked.LastRun = DateTime.UtcNow;
+                            tracked.Status = "OK";
+                            _lastRunTimes[tracked.Id] = DateTime.UtcNow;
+
+                            if (_options.EnableChangeTracking && oldValue != tracked.Value)
                             {
-                                var oldValue = analytic.Value;
-                                analytic.Value = await RunAnalyticsAsync(analytic, dbContext, stoppingToken);
-                                analytic.LastRun = DateTime.UtcNow;
-                                analytic.Status = "OK";
-                                _lastRunTimes[analytic.Id] = DateTime.UtcNow;
-
-                                await dbContext.SaveChangesAsync(stoppingToken);
-
-                                if (_options.EnableChangeTracking && oldValue != analytic.Value)
+                                await wdb.AddAsync(new ChangeLogRecord
                                 {
-                                    await dbContext.AddAsync(new ChangeLogRecord
-                                    {
-                                        Id = Guid.NewGuid(),
-                                        TableName = "sysAnalytics",
-                                        EntityId = analytic.Id.ToString(),
-                                        ChangedBy = "System",
-                                        ChangedAt = DateTime.UtcNow,
-                                        OriginalValue = oldValue,
-                                        NewValue = analytic.Value,
-                                        ChangeType = "Update",
-                                        PropertyName = "Value"
-                                    });
-                                    await dbContext.SaveChangesAsync(stoppingToken);
-                                }
+                                    Id = Guid.NewGuid(),
+                                    TableName = "sysAnalytics",
+                                    EntityId = tracked.Id.ToString(),
+                                    ChangedBy = "System",
+                                    ChangedAt = DateTime.UtcNow,
+                                    OriginalValue = oldValue,
+                                    NewValue = tracked.Value,
+                                    ChangeType = "Update",
+                                    PropertyName = "Value"
+                                }, ct);
                             }
-                            catch (Exception ex)
-                            {
-                                analytic.Status = $"Runtime Error: {ex.Message}";
-                                await dbContext.SaveChangesAsync(stoppingToken);
-                                _logger?.LogError(ex, "Error running analytics {AnalyticsName}", analytic.Name);
-                            }
+                            await wdb.SaveChangesAsync(ct);
                         }
                     }
+                    finally { _dbGate.Release(); }
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
                 catch (Exception ex)
                 {
-                    _logger?.LogError(ex, "Error in analytics loop");
+                    _logger?.LogError(ex, "Timer analytics loop failed; backing off 5s.");
+                    try { await Task.Delay(TimeSpan.FromSeconds(5), ct); } catch { }
                 }
-                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+
+                try { await Task.Delay(TimeSpan.FromSeconds(10), ct); } catch { }
             }
         }
 
-        private async Task<bool> ShouldRunAsync(Analytics analytic, DataContext dbContext, CancellationToken ct)
+        // ======================= ChangeLog-trigger loop =======================
+        private async Task ChangeLogLoopAsync(CancellationToken ct)
         {
-            if (analytic.Interval > 0)
+            int idleBackoffSeconds = 5;
+
+            while (!ct.IsCancellationRequested)
             {
-                if (_lastRunTimes.TryGetValue(analytic.Id, out var lastRun) &&
-                    (DateTime.UtcNow - lastRun) < _minimumRunInterval)
+                try
                 {
-                    _logger?.LogDebug("Skipping analytics {AnalyticsName} due to minimum run interval not met", analytic.Name);
-                    return false;
+                    await _dbGate.WaitAsync(ct);
+                    try
+                    {
+                        using var scope = _serviceProvider.CreateScope();
+                        var db = scope.ServiceProvider.GetRequiredService<DataContext>();
+
+                        // Load triggers; if none -> idle
+                        var triggers = await db.Set<AnalyticsTrigger>()
+                                               .AsNoTracking()
+                                               .ToListAsync(ct);
+
+                        if (triggers.Count == 0)
+                        {
+                            idleBackoffSeconds = Math.Min(60, idleBackoffSeconds * 2);
+                            try { await Task.Delay(TimeSpan.FromSeconds(idleBackoffSeconds), ct); } catch { }
+                            continue;
+                        }
+                        idleBackoffSeconds = 5;
+
+                        // Group triggers per analytics
+                        var groups = triggers.GroupBy(t => t.AnalyticsId).ToList();
+
+                        foreach (var grp in groups)
+                        {
+                            var analyticsId = grp.Key;
+                            var since = _clWatermark.GetOrAdd(analyticsId, DateTime.UtcNow.AddSeconds(-1));
+
+                            var tables = grp.Select(g => g.TableName)
+                                            .Where(s => !string.IsNullOrWhiteSpace(s))
+                                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                                            .ToList();
+                            var props = grp.Select(g => g.PropertyName)
+                                           .Where(s => !string.IsNullOrWhiteSpace(s))
+                                           .Distinct(StringComparer.OrdinalIgnoreCase)
+                                           .ToList();
+
+                            if (tables.Count == 0 || props.Count == 0)
+                            {
+                                // invalid triggers won't match anything; skip this analytic
+                                continue;
+                            }
+
+                            // Pull candidate change rows since watermark (cap to avoid long scans)
+                            var candidates = await db.Set<ChangeLogRecord>()
+                                .AsNoTracking()
+                                .Where(c => c.ChangedAt > since &&
+                                            tables.Contains(c.TableName) &&
+                                            props.Contains(c.PropertyName))
+                                .OrderBy(c => c.ChangedAt)
+                                .Take(500)
+                                .ToListAsync(ct);
+
+                            if (candidates.Count == 0) continue;
+
+                            bool matched = false;
+                            foreach (var row in candidates)
+                            {
+                                // advance watermark regardless, so we don't re-scan forever
+                                _clWatermark[analyticsId] = row.ChangedAt;
+
+                                foreach (var tr in grp)
+                                {
+                                    if (!row.TableName.Equals(tr.TableName, StringComparison.OrdinalIgnoreCase)) continue;
+                                    if (!row.PropertyName.Equals(tr.PropertyName, StringComparison.OrdinalIgnoreCase)) continue;
+                                    if (!string.IsNullOrWhiteSpace(tr.EntityId) &&
+                                        !string.Equals(tr.EntityId, row.EntityId, StringComparison.OrdinalIgnoreCase)) continue;
+                                    if (!string.IsNullOrWhiteSpace(tr.ChangeType) &&
+                                        !string.Equals(tr.ChangeType, row.ChangeType, StringComparison.OrdinalIgnoreCase)) continue;
+
+                                    matched = true;
+                                    break;
+                                }
+                                if (matched) break;
+                            }
+
+                            if (!matched) continue;
+
+                            // Run this analytic once (coalesced), respecting min interval
+                            using var wscope = _serviceProvider.CreateScope();
+                            var wdb = wscope.ServiceProvider.GetRequiredService<DataContext>();
+                            var analytic = await wdb.Set<Analytics>().FirstOrDefaultAsync(a => a.Id == analyticsId, ct);
+                            if (analytic == null) continue;
+
+                            if (_lastRunTimes.TryGetValue(analytic.Id, out var last) &&
+                                (DateTime.UtcNow - last) < _minimumRunInterval)
+                                continue;
+
+                            var oldValue = analytic.Value;
+                            var exec = await RunAnalyticsAsync(analytic, wdb, ct);
+
+                            analytic.Value = exec.Final;
+                            analytic.LastRun = DateTime.UtcNow;
+                            analytic.Status = "OK";
+                            _lastRunTimes[analytic.Id] = DateTime.UtcNow;
+
+                            if (_options.EnableChangeTracking && oldValue != analytic.Value)
+                            {
+                                await wdb.AddAsync(new ChangeLogRecord
+                                {
+                                    Id = Guid.NewGuid(),
+                                    TableName = "sysAnalytics",
+                                    EntityId = analytic.Id.ToString(),
+                                    ChangedBy = "System",
+                                    ChangedAt = DateTime.UtcNow,
+                                    OriginalValue = oldValue,
+                                    NewValue = analytic.Value,
+                                    ChangeType = "Update",
+                                    PropertyName = "Value"
+                                }, ct);
+                            }
+                            await wdb.SaveChangesAsync(ct);
+                        }
+                    }
+                    finally { _dbGate.Release(); }
                 }
-                return !analytic.LastRun.HasValue || (DateTime.UtcNow - analytic.LastRun.Value).TotalSeconds >= analytic.Interval;
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "ChangeLog analytics loop failed; backing off 5s.");
+                    try { await Task.Delay(TimeSpan.FromSeconds(5), ct); } catch { }
+                }
+
+                try { await Task.Delay(_changePollInterval, ct); } catch { }
             }
-            return false;
         }
 
-        private async Task UpdateAnalyticsTriggersAsync(Guid analyticId, DataContext dbContext)
+        // ======================= Execution helpers =======================
+        private async Task<bool> ShouldRunAsync(Analytics analytic, CancellationToken ct)
         {
-            var steps = await dbContext.Set<AnalyticsStep>()
-                .Where(s => s.AnalyticsId == analyticId)
-                .ToListAsync();
-            var triggers = new HashSet<(string Table, string Property)>();
+            if (analytic.Interval <= 0) return false;
 
-            foreach (var step in steps)
-            {
-                if (step.Operation == AnalyticsStepType.SqlQuery.ToString() || step.Operation == AnalyticsStepType.Timeseries.ToString())
-                {
-                    var tablesAndProperties = ExtractTableAndProperties(step.Expression);
-                    foreach (var (table, property) in tablesAndProperties)
-                    {
-                        triggers.Add((table, property));
-                    }
-                }
-            }
+            if (_lastRunTimes.TryGetValue(analytic.Id, out var last) &&
+                (DateTime.UtcNow - last) < _minimumRunInterval)
+                return false;
 
-            _analyticsTriggers[analyticId] = triggers;
+            return !analytic.LastRun.HasValue ||
+                   (DateTime.UtcNow - analytic.LastRun.Value).TotalSeconds >= analytic.Interval;
         }
 
-        private List<(string Table, string Property)> ExtractTableAndProperties(string expression)
-        {
-            var result = new List<(string, string)>();
-            try
-            {
-                if (expression.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
-                {
-                    var query = new Query().FromRaw(expression);
-                    var compiled = _sqlCompiler.Compile(query);
+        private Task<ExecResult> RunAnalyticsAsync(
+            Analytics analytic,
+            DataContext dbContext,
+            CancellationToken ct,
+            IDictionary<string, object>? seedContext)
+            => RunAnalyticsCoreAsync(analytic, dbContext, seedContext, ct);
 
-                    // Define SQL reserved keywords to exclude
-                    var sqlKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER",
-                "WHERE", "GROUP", "ORDER", "HAVING", "SET", "WITH", "FROM", "JOIN",
-                "INNER", "OUTER", "LEFT", "RIGHT", "FULL", "ON", "AS", "UNION",
-                "INTERSECT", "EXCEPT", "INTO", "VALUES"
-            };
+        private Task<ExecResult> RunAnalyticsAsync(
+            Analytics analytic,
+            DataContext dbContext,
+            CancellationToken ct)
+            => RunAnalyticsCoreAsync(analytic, dbContext, null, ct);
 
-                    // Match table names after FROM or JOIN, excluding SQL keywords
-                    var tableMatches = Regex.Matches(compiled.Sql,
-                        @"(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+AS\s+\w+)?",
-                        RegexOptions.IgnoreCase);
-                    var tables = tableMatches.Cast<Match>()
-                        .Select(m => m.Groups[1].Value)
-                        .Where(t => !sqlKeywords.Contains(t))
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToList();
-
-                    foreach (var table in tables)
-                    {
-                        var propertyMatches = Regex.Matches(expression,
-                            @"\b(?:AVG|SUM|COUNT|MIN|MAX)\s*\(\s*(\w+)\s*\)",
-                            RegexOptions.IgnoreCase);
-                        var properties = propertyMatches.Cast<Match>()
-                            .Select(m => m.Groups[1].Value)
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                            .ToList();
-                        foreach (var property in properties)
-                            result.Add((table, property));
-                    }
-                }
-                else if (expression.Contains(","))
-                {
-                    var parts = expression.Split(',');
-                    if (parts.Length >= 3)
-                    {
-                        var table = parts[0].Trim();
-                        var property = parts[2].Trim();
-                        result.Add((table, property));
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "Failed to extract tables and properties from expression: {Expression}", expression);
-            }
-            return result;
-        }
-
-        private async Task<string> RunAnalyticsAsync(Analytics analytic, DataContext dbContext, CancellationToken ct)
+        private async Task<ExecResult> RunAnalyticsCoreAsync(
+            Analytics analytic,
+            DataContext dbContext,
+            IDictionary<string, object>? seedContext,
+            CancellationToken ct)
         {
             var steps = await dbContext.Set<AnalyticsStep>()
                 .Where(s => s.AnalyticsId == analytic.Id)
                 .OrderBy(s => s.Order)
                 .ToListAsync(ct);
 
-            var context = new Dictionary<string, object>();
+            // case-insensitive context
+            var context = seedContext != null
+                ? new Dictionary<string, object>(seedContext, StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
             var loopCounts = new Dictionary<Guid, int>();
-            object lastResult = null;
+            object? lastResult = null;
             int currentStepIndex = 0;
 
             while (currentStepIndex < steps.Count)
@@ -350,7 +388,7 @@ namespace SmartData.AnalyticsService
                     loopCounts.TryAdd(step.Id, 0);
                     if (loopCounts[step.Id] >= step.MaxLoop)
                     {
-                        _logger?.LogWarning("Max loop count {MaxLoop} reached for Condition step {StepId}", step.MaxLoop, step.Id);
+                        _logger?.LogWarning("Max loop {MaxLoop} reached for Condition step {StepId}", step.MaxLoop, step.Id);
                         currentStepIndex++;
                         continue;
                     }
@@ -361,10 +399,14 @@ namespace SmartData.AnalyticsService
 
                 if (step.Operation == AnalyticsStepType.Condition.ToString())
                 {
-                    if (result is bool conditionResult && conditionResult && int.TryParse(step.ResultVariable, out var goToStep) && goToStep >= 1 && goToStep <= steps.Count && goToStep - 1 != currentStepIndex)
+                    if (result is bool cond &&
+                        cond &&
+                        int.TryParse(step.ResultVariable, out var goTo) &&
+                        goTo >= 1 && goTo <= steps.Count &&
+                        goTo - 1 != currentStepIndex)
                     {
                         loopCounts[step.Id]++;
-                        currentStepIndex = goToStep - 1;
+                        currentStepIndex = goTo - 1;
                         continue;
                     }
                     currentStepIndex++;
@@ -377,67 +419,69 @@ namespace SmartData.AnalyticsService
                         if (indexMatch.Success)
                         {
                             var arrayName = indexMatch.Groups[1].Value;
-                            var index = int.Parse(indexMatch.Groups[2].Value);
-                            if (!context.TryGetValue(arrayName, out var arrayObj) || arrayObj is not List<object> array)
+                            var idx = int.Parse(indexMatch.Groups[2].Value);
+                            if (!context.TryGetValue(arrayName, out var arrayObj) || arrayObj is not List<object> arr)
                             {
-                                array = new List<object>();
-                                context[arrayName] = array;
+                                arr = new List<object>();
+                                context[arrayName] = arr;
                             }
-                            while (array.Count <= index)
-                                array.Add(null);
-                            array[index] = result;
+                            while (arr.Count <= idx) arr.Add(null!);
+                            arr[idx] = result!;
                         }
                         else
                         {
-                            context[step.ResultVariable] = result;
+                            context[step.ResultVariable] = result!;
                         }
                     }
                     currentStepIndex++;
                 }
 
+                // Finalization
                 if (currentStepIndex == steps.Count)
                 {
                     if (step.Operation == AnalyticsStepType.SqlQuery.ToString())
                     {
-                        if (result is List<Dictionary<string, object>> queryResults && queryResults.Any())
+                        if (result is List<Dictionary<string, object>> rows && rows.Any())
                         {
-                            var firstRow = queryResults.First();
-                            if (!string.IsNullOrEmpty(step.ResultVariable) && firstRow.ContainsKey(step.ResultVariable))
-                                return firstRow[step.ResultVariable]?.ToString() ?? string.Empty;
-                            return firstRow.Values.FirstOrDefault()?.ToString() ?? string.Empty;
+                            var first = rows.First();
+                            if (!string.IsNullOrEmpty(step.ResultVariable) && first.ContainsKey(step.ResultVariable))
+                                return new ExecResult(first[step.ResultVariable]?.ToString() ?? string.Empty, context);
+                            return new ExecResult(first.Values.FirstOrDefault()?.ToString() ?? string.Empty, context);
                         }
-                        return string.Empty;
+                        return new ExecResult(string.Empty, context);
                     }
                     else if (step.Operation == AnalyticsStepType.Timeseries.ToString())
                     {
-                        if (result is List<TimeseriesResult> timeseriesResults && timeseriesResults.Any())
-                        {
-                            return timeseriesResults.Last().Value;
-                        }
-                        return string.Empty;
+                        if (result is List<TimeseriesResult> ts && ts.Any())
+                            return new ExecResult(ts.Last().Value, context);
+                        return new ExecResult(string.Empty, context);
                     }
                     else if (!string.IsNullOrEmpty(step.ResultVariable))
                     {
-                        var indexMatch = Regex.Match(step.ResultVariable, @"^(\w+)\[(\d+)\]$");
-                        if (indexMatch.Success)
+                        var m = Regex.Match(step.ResultVariable, @"^(\w+)\[(\d+)\]$");
+                        if (m.Success)
                         {
-                            var arrayName = indexMatch.Groups[1].Value;
-                            var index = int.Parse(indexMatch.Groups[2].Value);
-                            if (context.TryGetValue(arrayName, out var arrayObj) && arrayObj is List<object> array && index < array.Count)
-                                return array[index]?.ToString() ?? string.Empty;
+                            var arrName = m.Groups[1].Value;
+                            var idx = int.Parse(m.Groups[2].Value);
+                            if (context.TryGetValue(arrName, out var arrObj) && arrObj is List<object> arr && idx < arr.Count)
+                                return new ExecResult(arr[idx]?.ToString() ?? string.Empty, context);
                         }
-                        else if (context.TryGetValue(step.ResultVariable, out var finalResult))
+                        else if (context.TryGetValue(step.ResultVariable, out var final))
                         {
-                            return finalResult?.ToString() ?? string.Empty;
+                            return new ExecResult(final?.ToString() ?? string.Empty, context);
                         }
                     }
                 }
             }
 
-            return lastResult?.ToString() ?? string.Empty;
+            return new ExecResult(lastResult?.ToString() ?? string.Empty, context);
         }
 
-        private async Task<object> ExecuteStepAsync(AnalyticsStep step, DataContext dbContext, Dictionary<string, object> context, CancellationToken ct)
+        private async Task<object> ExecuteStepAsync(
+            AnalyticsStep step,
+            DataContext dbContext,
+            Dictionary<string, object> context,
+            CancellationToken ct)
         {
             var stepType = Enum.Parse<AnalyticsStepType>(step.Operation);
             var (expression, parameters) = stepType == AnalyticsStepType.SqlQuery || stepType == AnalyticsStepType.Timeseries
@@ -449,42 +493,48 @@ namespace SmartData.AnalyticsService
                 switch (stepType)
                 {
                     case AnalyticsStepType.SqlQuery:
-                        var typedParameters = System.Linq.Enumerable.Select<object, object>(parameters, p => p switch
                         {
-                            double d => d,
-                            int i => i,
-                            string s => s,
-                            _ => throw new InvalidOperationException($"Unsupported parameter type {p?.GetType()?.Name} for SQL query.")
-                        }).ToArray();
-                        var results = await dbContext.ExecuteSqlQueryAsync(expression, typedParameters);
-                        return System.Linq.Enumerable.Select<QueryResult, Dictionary<string, object>>(results, r => r.Data).ToList();
+                            var typed = parameters.Select(p => p switch
+                            {
+                                double d => (object)d,
+                                int i => i,
+                                string s => s,
+                                decimal m => m,
+                                long l => l,
+                                _ => p?.ToString() ?? string.Empty
+                            }).ToArray();
+
+                            var results = await dbContext.ExecuteSqlQueryAsync(expression, typed);
+                            return results.Select(r => r.Data).ToList();
+                        }
 
                     case AnalyticsStepType.Timeseries:
-                        var timeseriesParams = ParseTimeseriesExpression(expression, parameters);
-                        List<TimeseriesResult> timeseriesResults;
-                        if (timeseriesParams.InterpolationMethod == InterpolationMethod.None)
                         {
-                            timeseriesResults = await dbContext.GetTimeseriesAsync(
-                                timeseriesParams.TableName, timeseriesParams.EntityId, timeseriesParams.PropertyName,
-                                timeseriesParams.Start, timeseriesParams.End);
+                            var ts = ParseTimeseriesExpression(expression, parameters);
+                            List<TimeseriesResult> data;
+                            if (ts.InterpolationMethod == InterpolationMethod.None)
+                            {
+                                data = await dbContext.GetTimeseriesAsync(
+                                    ts.TableName, ts.EntityId, ts.PropertyName, ts.Start, ts.End);
+                            }
+                            else
+                            {
+                                data = await dbContext.GetInterpolatedTimeseriesAsync(
+                                    ts.TableName, ts.EntityId, ts.PropertyName, ts.Start, ts.End, ts.Interval, ts.InterpolationMethod);
+                            }
+                            return data;
                         }
-                        else
-                        {
-                            timeseriesResults = await dbContext.GetInterpolatedTimeseriesAsync(
-                                timeseriesParams.TableName, timeseriesParams.EntityId, timeseriesParams.PropertyName,
-                                timeseriesParams.Start, timeseriesParams.End, timeseriesParams.Interval, timeseriesParams.InterpolationMethod);
-                        }
-                        return timeseriesResults;
 
                     case AnalyticsStepType.CSharp:
                     case AnalyticsStepType.Variable:
-                        return await ExecuteCSharpAsync(expression, context);
+                        return await ExecuteCSharpAsync(step.Id, expression, context);
 
                     case AnalyticsStepType.Condition:
-                        var conditionResult = await ExecuteCSharpAsync(expression, context);
-                        if (conditionResult is not bool)
-                            throw new InvalidOperationException($"Condition step {step.Id} must return a boolean value.");
-                        return conditionResult;
+                        {
+                            var cond = await ExecuteCSharpAsync(step.Id, expression, context);
+                            if (cond is not bool) throw new InvalidOperationException($"Condition step {step.Id} must return boolean.");
+                            return cond;
+                        }
 
                     default:
                         throw new InvalidOperationException($"Unsupported step type: {stepType}");
@@ -492,7 +542,7 @@ namespace SmartData.AnalyticsService
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "Error executing step {StepId} of type {StepType}", step.Id, stepType);
+                _logger?.LogError(ex, "Error executing step {StepId} ({Type})", step.Id, stepType);
                 throw;
             }
         }
@@ -502,100 +552,95 @@ namespace SmartData.AnalyticsService
         {
             var parts = expression.Split(',');
             if (parts.Length < 5 || parts.Length > 7)
-                throw new InvalidOperationException("Timeseries expression must have 5 to 7 components: tableName,entityId,propertyName,start,end[,interval,method]");
+                throw new InvalidOperationException("Timeseries: table,entity,property,start,end[,interval,method]");
 
-            int paramIndex = 0;
-            var tableName = ReplaceParameter(parts[0], parameters, ref paramIndex);
-            var entityId = ReplaceParameter(parts[1], parameters, ref paramIndex);
-            var propertyName = ReplaceParameter(parts[2], parameters, ref paramIndex);
+            int pi = 0;
+            var table = ReplaceParameter(parts[0], parameters, ref pi);
+            var entity = ReplaceParameter(parts[1], parameters, ref pi);
+            var prop = ReplaceParameter(parts[2], parameters, ref pi);
 
-            if (!DateTime.TryParse(ReplaceParameter(parts[3], parameters, ref paramIndex), out var start))
-                throw new InvalidOperationException("Invalid start date format.");
-
-            if (!DateTime.TryParse(ReplaceParameter(parts[4], parameters, ref paramIndex), out var end))
-                throw new InvalidOperationException("Invalid end date format.");
+            if (!DateTime.TryParse(ReplaceParameter(parts[3], parameters, ref pi), out var start))
+                throw new InvalidOperationException("Invalid start date.");
+            if (!DateTime.TryParse(ReplaceParameter(parts[4], parameters, ref pi), out var end))
+                throw new InvalidOperationException("Invalid end date.");
 
             TimeSpan interval = TimeSpan.FromSeconds(1);
             InterpolationMethod method = InterpolationMethod.None;
 
             if (parts.Length > 5)
             {
-                if (!TimeSpan.TryParse(ReplaceParameter(parts[5], parameters, ref paramIndex), out interval))
-                    throw new InvalidOperationException("Invalid interval format.");
+                if (!TimeSpan.TryParse(ReplaceParameter(parts[5], parameters, ref pi), out interval))
+                    throw new InvalidOperationException("Invalid interval.");
             }
-
             if (parts.Length > 6)
             {
-                var methodStr = ReplaceParameter(parts[6], parameters, ref paramIndex);
-                if (!Enum.TryParse<InterpolationMethod>(methodStr, true, out method))
-                    throw new InvalidOperationException($"Invalid interpolation method: {methodStr}");
+                var m = ReplaceParameter(parts[6], parameters, ref pi);
+                if (!Enum.TryParse<InterpolationMethod>(m, true, out method))
+                    throw new InvalidOperationException($"Invalid interpolation method: {m}");
             }
 
-            return (tableName, entityId, propertyName, start, end, interval, method);
+            return (table, entity, prop, start, end, interval, method);
         }
 
-        private string ReplaceParameter(string part, List<object> parameters, ref int paramIndex)
+        private string ReplaceParameter(string part, List<object> parameters, ref int pi)
         {
             if (Regex.IsMatch(part, @"^@p\d+$"))
             {
-                if (paramIndex >= parameters.Count)
+                if (pi >= parameters.Count)
                     throw new InvalidOperationException($"Missing parameter for {part}");
-                return parameters[paramIndex++].ToString();
+                return parameters[pi++]?.ToString() ?? string.Empty;
             }
             return part.Trim();
         }
 
-        private async Task<object> ExecuteCSharpAsync(string script, Dictionary<string, object> context)
+        private async Task<object?> ExecuteCSharpAsync(Guid stepId, string script, Dictionary<string, object> context)
         {
             try
             {
-                _logger?.LogDebug("Compiling C# script: {Script}, Context keys: {Keys}",
-                    script, string.Join(", ", context.Keys));
-                var compilation = CSharpScript.Create(script, _scriptOptions, typeof(ScriptGlobals));
-                var diagnostics = compilation.GetCompilation().GetDiagnostics();
-                if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+                if (!_scriptCache.TryGetValue((stepId, script), out var runner))
                 {
-                    var errorMessages = string.Join("; ", diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()));
-                    _logger?.LogError("C# script compilation failed for script: {Script}. Errors: {Errors}", script, errorMessages);
-                    throw new InvalidOperationException($"C# script compilation failed: {errorMessages}");
+                    var compiled = CSharpScript.Create<object?>(script, _scriptOptions, typeof(ScriptGlobals));
+                    var diags = compiled.GetCompilation().GetDiagnostics();
+                    if (diags.Any(d => d.Severity == DiagnosticSeverity.Error))
+                    {
+                        var msg = string.Join("; ", diags.Where(d => d.Severity == DiagnosticSeverity.Error));
+                        throw new InvalidOperationException($"C# script compilation failed: {msg}");
+                    }
+                    runner = compiled.CreateDelegate();
+                    _scriptCache[(stepId, script)] = runner;
                 }
+
                 var globals = new ScriptGlobals { Context = context };
-                var scriptState = await compilation.RunAsync(globals);
-                return scriptState.ReturnValue;
+                return await runner(globals);
             }
             catch (CompilationErrorException ex)
             {
-                var errorMessages = string.Join("; ", ex.Diagnostics.Select(d => d.ToString()));
-                _logger?.LogError(ex, "C# script compilation error for script: {Script}. Errors: {Errors}", script, errorMessages);
-                throw new InvalidOperationException($"C# script compilation failed: {errorMessages}", ex);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Unexpected error executing C# script: {Script}", script);
-                throw new InvalidOperationException($"Unexpected error executing C# script: {ex.Message}", ex);
+                var msg = string.Join("; ", ex.Diagnostics.Select(d => d.ToString()));
+                throw new InvalidOperationException($"C# script compilation failed: {msg}", ex);
             }
         }
 
         private (string Expression, List<object> Parameters) ReplaceVariables(string expression, Dictionary<string, object> context)
         {
             var parameters = new List<object>();
-            var parameterIndex = 0;
+            int idx = 0;
 
-            var result = Regex.Replace(expression, @"\{([^{}]+)\}", m =>
+            var sql = Regex.Replace(expression, @"\{([^{}]+)\}", m =>
             {
-                var varName = m.Groups[1].Value;
-                if (context.TryGetValue(varName, out var value))
+                var name = m.Groups[1].Value;
+                if (context.TryGetValue(name, out var val))
                 {
-                    parameters.Add(value);
-                    return $"@p{parameterIndex++}";
+                    parameters.Add(val!);
+                    return $"@p{idx++}";
                 }
-                return string.Empty;
+                return string.Empty; // missing var becomes empty (safe for expressions you control)
             });
 
-            return (result, parameters);
+            return (sql, parameters);
         }
 
-        private bool ValidateSqlQuery(string sqlQuery, out string error)
+        // ======================= Validation & CRUD helpers =======================
+        private bool ValidateSqlQuery(string sqlQuery, out string? error)
         {
             try
             {
@@ -618,8 +663,6 @@ namespace SmartData.AnalyticsService
                     return false;
                 }
 
-                
-
                 error = null;
                 return true;
             }
@@ -630,26 +673,25 @@ namespace SmartData.AnalyticsService
             }
         }
 
-        private bool ValidateTimeseriesExpression(string expression, out string error)
+        private bool ValidateTimeseriesExpression(string expression, out string? error)
         {
             try
             {
                 var parts = expression.Split(',');
                 if (parts.Length < 5 || parts.Length > 7)
                 {
-                    error = "Timeseries expression must have 5 to 7 components: tableName,entityId,propertyName,start,end[,interval,method]";
+                    error = "Timeseries expression must have 5–7 parts: table,entity,property,start,end[,interval,method]";
                     return false;
                 }
 
                 if (parts.Length > 5 && !TimeSpan.TryParse(parts[5], out _))
                 {
-                    error = "Invalid interval format in timeseries expression.";
+                    error = "Invalid interval format.";
                     return false;
                 }
-
                 if (parts.Length > 6 && !Enum.TryParse<InterpolationMethod>(parts[6], true, out _))
                 {
-                    error = "Invalid interpolation method in timeseries expression.";
+                    error = "Invalid interpolation method.";
                     return false;
                 }
 
@@ -663,25 +705,26 @@ namespace SmartData.AnalyticsService
             }
         }
 
-        private bool ValidateCSharpScript(string script, out string error)
+        private bool ValidateCSharpScript(string script, out string? error)
         {
-            if (string.IsNullOrEmpty(script))
+            if (string.IsNullOrWhiteSpace(script))
             {
-                error = "Script cannot be null or empty.";
+                error = "Script cannot be empty.";
                 return false;
             }
+
             try
             {
                 var syntaxTree = CSharpSyntaxTree.ParseText(script);
                 var root = syntaxTree.GetRoot();
-                var dangerousNamespaces = new[] { "System.IO", "System.Net", "System.Reflection", "System.Threading", "System.Diagnostics" };
-                var hasDangerousCalls = root.DescendantNodes()
+                var dangerous = new[] { "System.IO", "System.Net", "System.Reflection", "System.Threading", "System.Diagnostics" };
+                var hasDanger = root.DescendantNodes()
                     .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax>()
-                    .Any(n => dangerousNamespaces.Any(ns => n.ToString().StartsWith(ns, StringComparison.OrdinalIgnoreCase)));
+                    .Any(n => dangerous.Any(ns => n.ToString().StartsWith(ns, StringComparison.OrdinalIgnoreCase)));
 
-                if (hasDangerousCalls)
+                if (hasDanger)
                 {
-                    error = "Script contains prohibited namespace usage (e.g., System.IO, System.Net).";
+                    error = "Script uses prohibited namespaces (IO/Net/Reflection/Threading/Diagnostics).";
                     return false;
                 }
                 error = null;
@@ -697,97 +740,91 @@ namespace SmartData.AnalyticsService
         public async Task AddAnalyticsAsync(AnalyticsConfig config, CancellationToken ct = default)
         {
             using var scope = _serviceProvider.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
+            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
 
-            if (await dbContext.Set<Analytics>().AnyAsync(c => c.Name == config.Name, ct))
-                throw new InvalidOperationException($"Analytics {config.Name} exists.");
+            if (await db.Set<Analytics>().AnyAsync(a => a.Name == config.Name, ct))
+                throw new InvalidOperationException($"Analytics '{config.Name}' exists.");
 
-            var (isValid, errors) = await VerifyAnalyticsAsync(config.Id == Guid.Empty ? Guid.NewGuid() : config.Id, config, ct);
-            if (!isValid)
-            {
-                var errorMessage = $"Validation Failed: {string.Join("; ", errors)}";
-                throw new InvalidOperationException(errorMessage);
-            }
+            var (ok, errors) = await VerifyAnalyticsAsync(config.Id == Guid.Empty ? Guid.NewGuid() : config.Id, config, ct);
+            if (!ok) throw new InvalidOperationException($"Validation Failed: {string.Join("; ", errors)}");
 
             var analytic = new Analytics
             {
                 Id = config.Id == Guid.Empty ? Guid.NewGuid() : config.Id,
                 Name = config.Name,
                 Interval = config.Interval,
-                Embeddable = config.Embeddable,
                 Value = "0",
                 Status = "OK"
             };
-            await dbContext.AddAsync(analytic, ct);
+            await db.AddAsync(analytic, ct);
 
             for (int i = 0; i < config.Steps.Count; i++)
             {
-                var step = config.Steps[i];
-                await dbContext.AddAsync(new AnalyticsStep
+                var s = config.Steps[i];
+                await db.AddAsync(new AnalyticsStep
                 {
                     Id = Guid.NewGuid(),
                     AnalyticsId = analytic.Id,
                     Order = i + 1,
-                    Operation = step.Type.ToString(),
-                    Expression = step.Config,
-                    ResultVariable = step.OutputVariable,
-                    MaxLoop = step.Type == AnalyticsStepType.Condition ? step.MaxLoop : 10
+                    Operation = s.Type.ToString(),
+                    Expression = s.Config,
+                    ResultVariable = s.OutputVariable,
+                    MaxLoop = s.Type == AnalyticsStepType.Condition ? s.MaxLoop : 10
                 }, ct);
             }
 
-            await dbContext.SaveChangesAsync(ct);
-            if (config.Interval < 0)
-                await UpdateAnalyticsTriggersAsync(analytic.Id, dbContext);
+            await db.SaveChangesAsync(ct);
         }
 
         public async Task DeleteAnalyticsAsync(Guid analyticId, CancellationToken ct = default)
         {
             using var scope = _serviceProvider.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
-            var analytic = await dbContext.Set<Analytics>().FirstOrDefaultAsync(c => c.Id == analyticId, ct);
-            if (analytic == null)
-                throw new InvalidOperationException($"Analytics {analyticId} does not exist.");
+            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
 
-            dbContext.Remove(analytic);
-            await dbContext.SaveChangesAsync(ct);
-            _analyticsTriggers.TryRemove(analyticId, out _);
+            var entity = await db.Set<Analytics>().FirstOrDefaultAsync(a => a.Id == analyticId, ct)
+                        ?? throw new InvalidOperationException($"Analytics {analyticId} does not exist.");
+
+            db.Remove(entity);
+            await db.SaveChangesAsync(ct);
+
             _lastRunTimes.TryRemove(analyticId, out _);
+            _clWatermark.TryRemove(analyticId, out _);
         }
 
-        public async Task<(bool IsValid, List<string> Errors)> VerifyAnalyticsAsync(Guid analyticId, AnalyticsConfig config = null, CancellationToken ct = default)
+        public async Task<(bool IsValid, List<string> Errors)> VerifyAnalyticsAsync(Guid analyticId, AnalyticsConfig? config = null, CancellationToken ct = default)
         {
             var errors = new List<string>();
             using var scope = _serviceProvider.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
+            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
 
-            Analytics analytic = null;
+            Analytics? analytic;
             List<AnalyticsStep> steps;
 
             if (config == null)
             {
-                analytic = await dbContext.Set<Analytics>().FirstOrDefaultAsync(c => c.Id == analyticId, ct);
+                analytic = await db.Set<Analytics>().FirstOrDefaultAsync(a => a.Id == analyticId, ct);
                 if (analytic == null)
                 {
                     errors.Add($"Analytics {analyticId} does not exist.");
                     return (false, errors);
                 }
-                steps = await dbContext.Set<AnalyticsStep>()
-                    .Where(s => s.AnalyticsId == analyticId)
-                    .OrderBy(s => s.Order)
-                    .ToListAsync(ct);
+                steps = await db.Set<AnalyticsStep>()
+                                .Where(s => s.AnalyticsId == analyticId)
+                                .OrderBy(s => s.Order)
+                                .ToListAsync(ct);
             }
             else
             {
-                analytic = new Analytics { Id = config.Id == Guid.Empty ? Guid.NewGuid() : config.Id };
-                steps = config.Steps.Select((step, i) => new AnalyticsStep
+                analytic = new Analytics { Id = config.Id == Guid.Empty ? Guid.NewGuid() : config.Id, Interval = config.Interval, Name = config.Name };
+                steps = config.Steps.Select((s, i) => new AnalyticsStep
                 {
                     Id = Guid.NewGuid(),
                     AnalyticsId = analytic.Id,
                     Order = i + 1,
-                    Operation = step.Type.ToString(),
-                    Expression = step.Config,
-                    ResultVariable = step.OutputVariable,
-                    MaxLoop = step.Type == AnalyticsStepType.Condition ? step.MaxLoop : 10
+                    Operation = s.Type.ToString(),
+                    Expression = s.Config,
+                    ResultVariable = s.OutputVariable,
+                    MaxLoop = s.Type == AnalyticsStepType.Condition ? s.MaxLoop : 10
                 }).ToList();
             }
 
@@ -796,220 +833,197 @@ namespace SmartData.AnalyticsService
                 errors.Add("Analytics must have at least one step.");
                 if (config == null)
                 {
-                    analytic.Status = "Validation Failed: Analytics must have at least one step.";
-                    await dbContext.SaveChangesAsync(ct);
+                    analytic!.Status = "Validation Failed: Analytics must have at least one step.";
+                    await db.SaveChangesAsync(ct);
                 }
                 return (false, errors);
             }
 
-            var tableNames = GetTables(dbContext);
-            var variables = new HashSet<string>();
-            var reachableSteps = new HashSet<int>();
-            var simulatedContext = new Dictionary<string, object>();
+            var tableNames = GetTables(db);
+            var variables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var reachable = new HashSet<int>();
+
+            var simContext = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
 
             for (int i = 0; i < steps.Count; i++)
             {
-                reachableSteps.Add(i + 1);
+                reachable.Add(i + 1);
                 var step = steps[i];
 
-                if (step.Order != i + 1)
-                    errors.Add($"Step {step.Order} ({step.Operation}): Incorrect order {step.Order}. Expected {i + 1}.");
+                if (step.Order != i + 1) errors.Add($"Step {step.Order} out of order (expected {i + 1}).");
 
                 if (!Enum.TryParse<AnalyticsStepType>(step.Operation, true, out var stepType))
-                    errors.Add($"Step {step.Order} ({step.Operation}): Invalid step type {step.Operation}.");
+                    errors.Add($"Step {step.Order}: Invalid step type '{step.Operation}'.");
 
-                if (string.IsNullOrEmpty(step.Expression))
+                if (string.IsNullOrWhiteSpace(step.Expression))
                 {
-                    errors.Add($"Step {step.Order} ({step.Operation}): Expression cannot be null or empty.");
+                    errors.Add($"Step {step.Order}: Expression cannot be empty.");
                     continue;
                 }
 
-                var matches = Regex.Matches(step.Expression, @"\{([^{}]+)\}");
-                if (stepType == AnalyticsStepType.CSharp || stepType == AnalyticsStepType.Condition)
+                var varRefs = Regex.Matches(step.Expression, @"\{([^{}]+)\}")
+                                   .Select(m => m.Groups[1].Value);
+
+                if (stepType is AnalyticsStepType.CSharp or AnalyticsStepType.Condition)
                 {
-                    foreach (Match match in matches)
-                    {
-                        var varName = match.Groups[1].Value;
-                        if (!variables.Contains(varName) && i > 0)
-                            errors.Add($"Step {step.Order} ({step.Operation}): Unknown variable {varName} in expression '{step.Expression}'. Ensure it is defined in a previous step or provided at runtime.");
-                    }
+                    foreach (var name in varRefs)
+                        if (!variables.Contains(name) && i > 0)
+                            errors.Add($"Step {step.Order}: Unknown variable '{name}'.");
                 }
 
                 if (!string.IsNullOrEmpty(step.ResultVariable) && stepType != AnalyticsStepType.Condition)
                 {
-                    var indexMatch = Regex.Match(step.ResultVariable, @"^(\w+)\[(\d+)\]$");
-                    if (indexMatch.Success)
+                    var idxMatch = Regex.Match(step.ResultVariable, @"^(\w+)\[(\d+)\]$");
+                    if (idxMatch.Success)
                     {
-                        var arrayName = indexMatch.Groups[1].Value;
-                        if (i > 0 && !variables.Contains(arrayName))
-                            errors.Add($"Step {step.Order} ({step.Operation}): Array {arrayName} must be defined before index access in expression '{step.Expression}'.");
+                        var arrName = idxMatch.Groups[1].Value;
+                        if (i > 0 && !variables.Contains(arrName))
+                            errors.Add($"Step {step.Order}: Array '{arrName}' must be defined earlier.");
                     }
                 }
 
                 switch (stepType)
                 {
                     case AnalyticsStepType.SqlQuery:
-                        if (!ValidateSqlQuery(step.Expression, out var sqlError))
-                            errors.Add($"Step {step.Order} ({step.Operation}): {sqlError} in expression '{step.Expression}'");
-                        var tablesAndProperties = ExtractTableAndProperties(step.Expression);
-                        foreach (var (table, property) in tablesAndProperties)
                         {
-                            if (!tableNames.Contains(table))
-                                errors.Add($"Step {step.Order} ({step.Operation}): Invalid table reference {table} in expression '{step.Expression}'.");
-                            var entityType = dbContext.Model.GetEntityTypes()
-                                .FirstOrDefault(t => t.GetTableName().Equals(table, StringComparison.OrdinalIgnoreCase))
-                                ?.ClrType;
-                            if (entityType != null)
+                            if (!ValidateSqlQuery(step.Expression, out var sqlErr))
+                                errors.Add($"Step {step.Order} (SqlQuery): {sqlErr}");
+
+                            foreach (var (table, prop) in ExtractTableAndProperties(step.Expression))
                             {
-                                var prop = entityType.GetProperty(property, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                                if (prop == null)
-                                    errors.Add($"Step {step.Order} ({step.Operation}): Property {property} does not exist on table {table} in expression '{step.Expression}'.");
+                                if (!tableNames.Contains(table))
+                                    errors.Add($"Step {step.Order}: Unknown table '{table}'.");
+                                var et = db.Model.GetEntityTypes()
+                                    .FirstOrDefault(t => t.GetTableName().Equals(table, StringComparison.OrdinalIgnoreCase))
+                                    ?.ClrType;
+                                if (et != null)
+                                {
+                                    var pi = et.GetProperty(prop, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                                    if (pi == null)
+                                        errors.Add($"Step {step.Order}: Property '{prop}' not found on '{table}'.");
+                                }
                             }
+                            break;
                         }
-                        break;
 
                     case AnalyticsStepType.Timeseries:
-                        if (!ValidateTimeseriesExpression(step.Expression, out var timeseriesError))
-                            errors.Add($"Step {step.Order} ({step.Operation}): {timeseriesError} in expression '{step.Expression}'");
-                        var timeseriesTables = ExtractTableAndProperties(step.Expression);
-                        foreach (var (table, _) in timeseriesTables)
-                            if (!tableNames.Contains(table))
-                                errors.Add($"Step {step.Order} ({step.Operation}): Invalid table reference {table} in expression '{step.Expression}'.");
-                        if (i == steps.Count - 1 && string.IsNullOrEmpty(step.ResultVariable))
-                            errors.Add($"Step {step.Order} ({step.Operation}): Last Timeseries step must have a ResultVariable in expression '{step.Expression}'.");
-                        break;
+                        {
+                            if (!ValidateTimeseriesExpression(step.Expression, out var tsErr))
+                                errors.Add($"Step {step.Order} (Timeseries): {tsErr}");
+                            foreach (var (table, _) in ExtractTableAndProperties(step.Expression))
+                                if (!tableNames.Contains(table))
+                                    errors.Add($"Step {step.Order}: Unknown table '{table}'.");
+                            if (i == steps.Count - 1 && string.IsNullOrEmpty(step.ResultVariable))
+                                errors.Add($"Step {step.Order}: Last Timeseries step must have a ResultVariable.");
+                            break;
+                        }
 
                     case AnalyticsStepType.CSharp:
                     case AnalyticsStepType.Variable:
-                        if (!ValidateCSharpScript(step.Expression, out var scriptError))
-                            errors.Add($"Step {step.Order} ({step.Operation}): {scriptError} in expression '{step.Expression}'");
-                        else
                         {
-                            try
+                            if (!ValidateCSharpScript(step.Expression, out var scErr))
+                                errors.Add($"Step {step.Order} ({stepType}): {scErr}");
+                            else
                             {
-                                var syntaxTree = CSharpSyntaxTree.ParseText(step.Expression);
-                                var compilation = CSharpScript.Create(step.Expression, _scriptOptions, typeof(ScriptGlobals));
-                                var diagnostics = compilation.GetCompilation().GetDiagnostics();
-                                if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+                                try
                                 {
-                                    var errorMessages = string.Join("; ", diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()));
-                                    errors.Add($"Step {step.Order} ({step.Operation}): Invalid {stepType} script: {errorMessages} in expression '{step.Expression}'");
-                                }
-                                else //if (stepType == AnalyticsStepType.Variable)
-                                {
-                                    // Simulate execution to determine return type
-                                    var globals = new ScriptGlobals
+                                    var compilation = CSharpScript.Create(step.Expression, _scriptOptions, typeof(ScriptGlobals));
+                                    var diags = compilation.GetCompilation().GetDiagnostics();
+                                    if (diags.Any(d => d.Severity == DiagnosticSeverity.Error))
                                     {
-                                        Context = new Dictionary<string, object>(simulatedContext)
-                                    };
-                                    var scriptState = await CSharpScript.EvaluateAsync(step.Expression, _scriptOptions, globals);
-                                    if (scriptState != null && !string.IsNullOrEmpty(step.ResultVariable))
+                                        var msgs = string.Join("; ", diags.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()));
+                                        errors.Add($"Step {step.Order} ({stepType}): {msgs}");
+                                    }
+                                    else
                                     {
-                                        var varName = Regex.Match(step.ResultVariable, @"^(\w+)\[\d+\]$").Success
-                                            ? Regex.Match(step.ResultVariable, @"^(\w+)\[\d+\]$").Groups[1].Value
-                                            : step.ResultVariable;
-                                        simulatedContext[varName] = scriptState; // Store actual value
+                                        var globals = new ScriptGlobals { Context = new Dictionary<string, object>(simContext) };
+                                        var value = await CSharpScript.EvaluateAsync(step.Expression, _scriptOptions, globals);
+                                        if (value != null && !string.IsNullOrEmpty(step.ResultVariable))
+                                        {
+                                            var m = Regex.Match(step.ResultVariable, @"^(\w+)\[\d+\]$");
+                                            var varName = m.Success ? m.Groups[1].Value : step.ResultVariable;
+                                            simContext[varName] = value;
+                                        }
                                     }
                                 }
+                                catch (Exception ex)
+                                {
+                                    errors.Add($"Step {step.Order} ({stepType}) validation failed: {ex.Message}");
+                                }
                             }
-                            catch (Exception ex)
-                            {
-                                errors.Add($"Step {step.Order} ({step.Operation}): {stepType} script validation failed: {ex.Message} in expression '{step.Expression}'");
-                            }
+                            if (i == steps.Count - 1 && string.IsNullOrEmpty(step.ResultVariable))
+                                errors.Add($"Step {step.Order} ({stepType}): Last step must set ResultVariable.");
+                            break;
                         }
-                        if (i == steps.Count - 1 && string.IsNullOrEmpty(step.ResultVariable))
-                            errors.Add($"Step {step.Order} ({step.Operation}): Last {stepType} step must have a ResultVariable in expression '{step.Expression}'.");
-                        break;
 
                     case AnalyticsStepType.Condition:
-                        if (!ValidateCSharpScript(step.Expression, out var conditionScriptError))
-                            errors.Add($"Step {step.Order} ({step.Operation}): {conditionScriptError} in expression '{step.Expression}'");
-                        else
                         {
-                            try
+                            if (!ValidateCSharpScript(step.Expression, out var condErr))
+                                errors.Add($"Step {step.Order} (Condition): {condErr}");
+                            else
                             {
-                                var syntaxTree = CSharpSyntaxTree.ParseText(step.Expression);
-                                var compilation = CSharpScript.Create(step.Expression, _scriptOptions, typeof(ScriptGlobals));
-                                var diagnostics = compilation.GetCompilation().GetDiagnostics();
-                                if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+                                try
                                 {
-                                    var errorMessages = string.Join("; ", diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()));
-                                    errors.Add($"Step {step.Order} ({step.Operation}): Invalid condition script: {errorMessages} in expression '{step.Expression}'");
-                                }
-                                else
-                                {
-                                    var globals = new ScriptGlobals
+                                    var compilation = CSharpScript.Create(step.Expression, _scriptOptions, typeof(ScriptGlobals));
+                                    var diags = compilation.GetCompilation().GetDiagnostics();
+                                    if (diags.Any(d => d.Severity == DiagnosticSeverity.Error))
                                     {
-                                        Context = new Dictionary<string, object>(simulatedContext)
-                                    };
-                                    try
-                                    {
-                                        var scriptState = await CSharpScript.EvaluateAsync(step.Expression, _scriptOptions, globals);
-                                        if (scriptState is not bool)
-                                            errors.Add($"Step {step.Order} ({step.Operation}): Condition script must return a boolean value in expression '{step.Expression}'");
+                                        var msgs = string.Join("; ", diags.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.ToString()));
+                                        errors.Add($"Step {step.Order} (Condition): {msgs}");
                                     }
-                                    catch (Exception ex)
+                                    else
                                     {
-                                        errors.Add($"Step {step.Order} ({step.Operation}): Condition script execution failed: {ex.Message} in expression '{step.Expression}'");
+                                        var globals = new ScriptGlobals { Context = new Dictionary<string, object>(simContext) };
+                                        var res = await CSharpScript.EvaluateAsync(step.Expression, _scriptOptions, globals);
+                                        if (res is not bool) errors.Add($"Step {step.Order} (Condition): must return boolean.");
                                     }
                                 }
+                                catch (Exception ex)
+                                {
+                                    errors.Add($"Step {step.Order} (Condition) validation failed: {ex.Message}");
+                                }
                             }
-                            catch (Exception ex)
-                            {
-                                errors.Add($"Step {step.Order} ({step.Operation}): Condition script validation failed: {ex.Message} in expression '{step.Expression}'");
-                            }
+                            if (!int.TryParse(step.ResultVariable, out var goTo) ||
+                                goTo < 1 || goTo > steps.Count || goTo == i + 1)
+                                errors.Add($"Step {step.Order} (Condition): invalid GoTo '{step.ResultVariable}'.");
+                            else
+                                reachable.Add(goTo);
+                            if (step.MaxLoop <= 0)
+                                errors.Add($"Step {step.Order} (Condition): MaxLoop must be positive.");
+                            break;
                         }
-                        if (!int.TryParse(step.ResultVariable, out var goToStep) || goToStep < 1 || goToStep > steps.Count || goToStep == i + 1)
-                            errors.Add($"Step {step.Order} ({step.Operation}): Invalid GoTo step number {step.ResultVariable}. Must be between 1 and {steps.Count}, not current step in expression '{step.Expression}'.");
-                        else
-                            reachableSteps.Add(goToStep);
-                        if (step.MaxLoop <= 0)
-                            errors.Add($"Step {step.Order} ({step.Operation}): MaxLoop must be positive in expression '{step.Expression}'.");
-                        break;
                 }
 
                 if (stepType != AnalyticsStepType.Condition && !string.IsNullOrEmpty(step.ResultVariable))
                 {
-                    var indexMatch = Regex.Match(step.ResultVariable, @"^(\w+)\[(\d+)\]$");
-                    var varName = indexMatch.Success ? indexMatch.Groups[1].Value : step.ResultVariable;
-                    variables.Add(varName);
-                    if (!simulatedContext.ContainsKey(varName))
+                    var idxMatch = Regex.Match(step.ResultVariable, @"^(\w+)\[(\d+)\]$");
+                    var name = idxMatch.Success ? idxMatch.Groups[1].Value : step.ResultVariable;
+                    variables.Add(name);
+                    if (!simContext.ContainsKey(name))
                     {
-                        if (indexMatch.Success)
-                            simulatedContext[varName] = new List<object>();
-                        else if (stepType == AnalyticsStepType.Variable)
-                            simulatedContext[varName] = 0; // Default to 0 for Variable steps
-                        else
-                            simulatedContext[varName] = null;
+                        if (idxMatch.Success) simContext[name] = new List<object>();
+                        else if (stepType == AnalyticsStepType.Variable) simContext[name] = 0;
+                        else simContext[name] = null!;
                     }
                 }
             }
 
             for (int i = 1; i <= steps.Count; i++)
-            {
-                if (!reachableSteps.Contains(i))
+                if (!reachable.Contains(i))
                     errors.Add($"Step {i}: Unreachable due to loop configuration.");
-            }
 
-            if (errors.Any() && config == null)
+            if (config == null)
             {
-                var errorMessage = $"Validation Failed: {string.Join("; ", errors)}";
-                _logger?.LogWarning("Analytics {AnalyticsId} validation failed: {Errors}", analyticId, errorMessage);
-                analytic.Status = errorMessage;
-                await dbContext.SaveChangesAsync(ct);
-            }
-            else if (config == null)
-            {
-                analytic.Status = "OK";
-                await dbContext.SaveChangesAsync(ct);
+                analytic!.Status = errors.Any() ? $"Validation Failed: {string.Join("; ", errors)}" : "OK";
+                await db.SaveChangesAsync(ct);
             }
 
             return (errors.Count == 0, errors);
         }
 
-        private HashSet<string> GetTables(DataContext dbContext)
+        private HashSet<string> GetTables(DataContext db)
         {
-            var systemTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            var system = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "__sysChangeLog",
                 "__sysEmbeddings",
@@ -1017,24 +1031,78 @@ namespace SmartData.AnalyticsService
                 "__sysTimeseriesDeltas",
                 "__sysIntegrityLog",
                 "__sysAnalytics",
-                "__sysAnalyticsSteps"
+                "__sysAnalyticsSteps",
+                "__sysAnalyticsTriggers"
             };
 
-            var tableNames = dbContext.Model.GetEntityTypes()
+            return db.Model.GetEntityTypes()
                 .Select(t => t.GetTableName())
-                .Where(t => !systemTables.Contains(t))
+                .Where(t => !system.Contains(t))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            return tableNames;
         }
+
+        private List<(string Table, string Property)> ExtractTableAndProperties(string expression)
+        {
+            var result = new List<(string, string)>();
+            try
+            {
+                if (expression.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+                {
+                    var query = new Query().FromRaw(expression);
+                    var compiled = _sqlCompiler.Compile(query);
+
+                    var keywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        "SELECT","INSERT","UPDATE","DELETE","CREATE","DROP","ALTER",
+                        "WHERE","GROUP","ORDER","HAVING","SET","WITH","FROM","JOIN",
+                        "INNER","OUTER","LEFT","RIGHT","FULL","ON","AS","UNION",
+                        "INTERSECT","EXCEPT","INTO","VALUES"
+                    };
+
+                    var tableMatches = Regex.Matches(compiled.Sql,
+                        @"(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+AS\s+\w+)?",
+                        RegexOptions.IgnoreCase);
+
+                    var tables = tableMatches.Cast<Match>()
+                                             .Select(m => m.Groups[1].Value)
+                                             .Where(t => !keywords.Contains(t))
+                                             .Distinct(StringComparer.OrdinalIgnoreCase)
+                                             .ToList();
+
+                    foreach (var table in tables)
+                    {
+                        var propMatches = Regex.Matches(expression,
+                            @"\b(?:AVG|SUM|COUNT|MIN|MAX)\s*\(\s*(\w+)\s*\)",
+                            RegexOptions.IgnoreCase);
+                        var props = propMatches.Cast<Match>()
+                                               .Select(m => m.Groups[1].Value)
+                                               .Distinct(StringComparer.OrdinalIgnoreCase);
+                        foreach (var p in props) result.Add((table, p));
+                    }
+                }
+                else if (expression.Contains(","))
+                {
+                    var parts = expression.Split(',');
+                    if (parts.Length >= 3)
+                        result.Add((parts[0].Trim(), parts[2].Trim()));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to extract tables/properties from: {Expression}", expression);
+            }
+            return result;
+        }
+
+        // ======================= Export / Import / RunOnce =======================
         public async Task<string> ExportAnalyticsAsync(Guid analyticId, CancellationToken ct = default)
         {
             using var scope = _serviceProvider.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
-            var analytic = await dbContext.Set<Analytics>().FirstOrDefaultAsync(c => c.Id == analyticId, ct);
-            if (analytic == null)
-                throw new InvalidOperationException($"Analytics {analyticId} does not exist.");
+            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
+            var analytic = await db.Set<Analytics>().FirstOrDefaultAsync(a => a.Id == analyticId, ct)
+                          ?? throw new InvalidOperationException($"Analytics {analyticId} does not exist.");
 
-            var steps = await dbContext.Set<AnalyticsStep>()
+            var steps = await db.Set<AnalyticsStep>()
                 .Where(s => s.AnalyticsId == analyticId)
                 .OrderBy(s => s.Order)
                 .ToListAsync(ct);
@@ -1044,7 +1112,6 @@ namespace SmartData.AnalyticsService
                 Id = analytic.Id,
                 Name = analytic.Name,
                 Interval = analytic.Interval,
-                Embeddable = analytic.Embeddable,
                 Steps = steps.Select(s => new AnalyticsStepConfig
                 {
                     Type = Enum.Parse<AnalyticsStepType>(s.Operation),
@@ -1060,45 +1127,144 @@ namespace SmartData.AnalyticsService
         public async Task ImportAnalyticsAsync(string json, CancellationToken ct = default)
         {
             using var scope = _serviceProvider.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
+            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
             var config = JsonSerializer.Deserialize<AnalyticsConfig>(json);
-            if (config == null || string.IsNullOrEmpty(config.Name))
-                throw new InvalidOperationException("Invalid JSON format for analytics import.");
+            if (config == null || string.IsNullOrWhiteSpace(config.Name))
+                throw new InvalidOperationException("Invalid analytics JSON.");
 
             await AddAnalyticsAsync(config, ct);
         }
 
         public async Task<string> ExecuteAnalyticsAsync(Guid analyticId, CancellationToken ct = default)
         {
+            var res = await ExecuteAnalyticsWithContextAsync(analyticId, ct);
+            return res.Final;
+        }
+
+        public async Task<(string Final, IReadOnlyDictionary<string, object> Context)> ExecuteAnalyticsWithContextAsync(Guid analyticId, CancellationToken ct = default)
+        {
             using var scope = _serviceProvider.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<DataContext>();
-            var analytic = await dbContext.Set<Analytics>().FirstOrDefaultAsync(c => c.Id == analyticId, ct);
-            if (analytic == null)
-                throw new InvalidOperationException($"Analytics {analyticId} does not exist.");
+            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
+            var analytic = await db.Set<Analytics>().FirstOrDefaultAsync(a => a.Id == analyticId, ct)
+                          ?? throw new InvalidOperationException($"Analytics {analyticId} does not exist.");
 
-            try
+            var exec = await RunAnalyticsAsync(analytic, db, ct);
+            analytic.Value = exec.Final;
+            analytic.LastRun = DateTime.UtcNow;
+            analytic.Status = "OK";
+            _lastRunTimes[analytic.Id] = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+            return (exec.Final, exec.Vars);
+        }
+
+        public async Task RunOnceAsync(
+            Guid tenantId,
+            Guid analyticsId,
+            bool isTimeDriven,
+            string? triggerTable,
+            IReadOnlyDictionary<string, object>? variables,
+            CancellationToken ct)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
+            var analytic = await db.Set<Analytics>().FirstOrDefaultAsync(a => a.Id == analyticsId, ct)
+                          ?? throw new InvalidOperationException($"Analytics {analyticsId} does not exist.");
+
+            // Seeded context (reserved/system fields + caller variables)
+            var seed = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
             {
-                if (_lastRunTimes.TryGetValue(analytic.Id, out var lastRun) &&
-                    (DateTime.UtcNow - lastRun) < _minimumRunInterval)
+                ["__tenantId"] = tenantId.ToString(),
+                ["__isTimeDriven"] = isTimeDriven,
+                ["__nowUtc"] = DateTime.UtcNow
+            };
+            if (!string.IsNullOrWhiteSpace(triggerTable))
+                seed["__triggerTable"] = triggerTable;
+            if (variables != null)
+                foreach (var kv in variables) seed[kv.Key] = kv.Value;
+
+            if (_lastRunTimes.TryGetValue(analytic.Id, out var last) &&
+                (DateTime.UtcNow - last) < _minimumRunInterval)
+            {
+                _logger?.LogDebug("RunOnce skipped for {Name} (min interval guard).", analytic.Name);
+                return;
+            }
+
+            var oldValue = analytic.Value;
+            var exec = await RunAnalyticsAsync(analytic, db, ct, seed);
+
+            analytic.Value = exec.Final;
+            analytic.LastRun = DateTime.UtcNow;
+            analytic.Status = "OK";
+            _lastRunTimes[analytic.Id] = DateTime.UtcNow;
+
+            if (_options.EnableChangeTracking && oldValue != analytic.Value)
+            {
+                await db.AddAsync(new ChangeLogRecord
                 {
-                    _logger?.LogDebug("Skipping analytics {AnalyticsName} due to minimum run interval not met", analytic.Name);
-                    return analytic.Value;
-                }
+                    Id = Guid.NewGuid(),
+                    TableName = "sysAnalytics",
+                    EntityId = analytic.Id.ToString(),
+                    ChangedBy = "System",
+                    ChangedAt = DateTime.UtcNow,
+                    OriginalValue = oldValue,
+                    NewValue = analytic.Value,
+                    ChangeType = "Update",
+                    PropertyName = "Value"
+                }, ct);
+            }
+            await db.SaveChangesAsync(ct);
+        }
 
-                analytic.Value = await RunAnalyticsAsync(analytic, dbContext, ct);
-                analytic.LastRun = DateTime.UtcNow;
-                analytic.Status = "OK";
-                _lastRunTimes[analytic.Id] = DateTime.UtcNow;
-                await dbContext.SaveChangesAsync(ct);
-                return analytic.Value;
-            }
-            catch (Exception ex)
+        // ======================= Trigger management API =======================
+        public async Task<AnalyticsTrigger> AddTriggerAsync(
+            Guid analyticsId,
+            string tableName,
+            string propertyName,
+            string? entityId = null,
+            string? changeType = null,
+            CancellationToken ct = default)
+        {
+            if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentNullException(nameof(tableName));
+            if (string.IsNullOrWhiteSpace(propertyName)) throw new ArgumentNullException(nameof(propertyName));
+
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
+
+            var exists = await db.Set<Analytics>().AnyAsync(a => a.Id == analyticsId, ct);
+            if (!exists) throw new InvalidOperationException($"Analytics {analyticsId} does not exist.");
+
+            var trig = new AnalyticsTrigger
             {
-                analytic.Status = $"Runtime Error: {ex.Message}";
-                await dbContext.SaveChangesAsync(ct);
-                _logger?.LogError(ex, "Error executing analytics {AnalyticsName}", analytic.Name);
-                throw;
-            }
+                Id = Guid.NewGuid(),
+                AnalyticsId = analyticsId,
+                TableName = tableName,
+                PropertyName = propertyName,
+                EntityId = string.IsNullOrWhiteSpace(entityId) ? null : entityId,
+                ChangeType = string.IsNullOrWhiteSpace(changeType) ? null : changeType
+            };
+            await db.AddAsync(trig, ct);
+            await db.SaveChangesAsync(ct);
+            return trig;
+        }
+
+        public async Task<List<AnalyticsTrigger>> GetTriggersAsync(Guid analyticsId, CancellationToken ct = default)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
+            return await db.Set<AnalyticsTrigger>()
+                           .AsNoTracking()
+                           .Where(t => t.AnalyticsId == analyticsId)
+                           .ToListAsync(ct);
+        }
+
+        public async Task RemoveTriggerAsync(Guid triggerId, CancellationToken ct = default)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
+            var trig = await db.Set<AnalyticsTrigger>().FirstOrDefaultAsync(t => t.Id == triggerId, ct);
+            if (trig == null) return;
+            db.Remove(trig);
+            await db.SaveChangesAsync(ct);
         }
     }
 }

@@ -110,19 +110,6 @@ namespace SmartData.Models
         }
     }
 
-    public class ChangeLogRecord
-    {
-        public Guid Id { get; set; }
-        public string TableName { get; set; }
-        public string EntityId { get; set; }
-        public string ChangedBy { get; set; }
-        public string PropertyName { get; set; }
-        public DateTime ChangedAt { get; set; }
-        public string? OriginalValue { get; set; }
-        public string? NewValue { get; set; }
-        public string ChangeType { get; set; }
-    }
-
     public class IntegrityLogRecord
     {
         public Guid Id { get; set; }
@@ -137,12 +124,17 @@ namespace SmartData.Models
     public class Analytics
     {
         public Guid Id { get; set; }
+        public Guid TenantId { get; set; }
+        public bool Enabled {  get; set; }
+        public string OutputMode { get; set; } = "Memory"; // NEW: "Memory" | "Table"
+        public string? OutputTable { get; set; }       //e.g., "Variables"
+        public DateTime? NextRun { get; set; }         //scheduler convenience
+        public DateTime? LastRun { get; set; }
+        public int Interval { get; set; } //seconds
         public string Name { get; set; }
         public string Value { get; set; }
-        public int Interval { get; set; }
-        public DateTime? LastRun { get; set; }
-        public bool Embeddable { get; set; }
         public string Status { get; set; }
+
     }
 
     public class AnalyticsStep
