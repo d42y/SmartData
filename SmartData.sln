@@ -5,10 +5,6 @@ VisualStudioVersion = 17.13.35913.81
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartData", "SmartData\SmartData.csproj", "{897C1ECE-BEAC-4D81-819F-1F02984AFDB0}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartData.UnitTests", "SmartData.UnitTests\SmartData.UnitTests.csproj", "{47902F45-08FB-427C-B32F-BE977EF68AC1}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartBuildingDemo", "SmartBuildingDemo\SmartBuildingDemo.csproj", "{4EB07E65-2786-4975-8300-DBB58719263A}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -19,14 +15,6 @@ Global
 		{897C1ECE-BEAC-4D81-819F-1F02984AFDB0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{897C1ECE-BEAC-4D81-819F-1F02984AFDB0}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{897C1ECE-BEAC-4D81-819F-1F02984AFDB0}.Release|Any CPU.Build.0 = Release|Any CPU
-		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{47902F45-08FB-427C-B32F-BE977EF68AC1}.Release|Any CPU.Build.0 = Release|Any CPU
-		{4EB07E65-2786-4975-8300-DBB58719263A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{4EB07E65-2786-4975-8300-DBB58719263A}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{4EB07E65-2786-4975-8300-DBB58719263A}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{4EB07E65-2786-4975-8300-DBB58719263A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

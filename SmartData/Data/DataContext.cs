@@ -1,13 +1,13 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using SmartData.Core;
-using SmartData.Models;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
-using Microsoft.Extensions.Logging;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
-using System.Linq.Expressions;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Microsoft.Extensions.Logging;
+using SmartData.Core;
+using SmartData.Models;
 
 namespace SmartData.Data
 {
@@ -17,7 +17,7 @@ namespace SmartData.Data
         public virtual void OnModelCreating(ModelBuilder modelBuilder) { }
     }
 
-    public class DataContext : DbContext
+    public partial class DataContext : DbContext
     {
         private readonly ConcurrentDictionary<Type, string> _entityTypes = new();
         private readonly DataOptions _options;
@@ -93,28 +93,39 @@ namespace SmartData.Data
                 {
                     entity.ToTable("__sysTimeseriesBaseValues");
                     entity.HasKey(e => e.Id);
-                    entity.Property(e => e.EntityId).IsRequired().HasMaxLength(128);
+
                     entity.Property(e => e.TableName).IsRequired().HasMaxLength(255);
+                    entity.Property(e => e.EntityId).IsRequired().HasMaxLength(128);
                     entity.Property(e => e.PropertyName).IsRequired().HasMaxLength(128);
-                    entity.Property(e => e.Value).IsRequired();
-                    entity.Property(e => e.Timestamp).IsRequired();
-                    entity.HasIndex(e => new { e.TableName, e.EntityId, e.PropertyName, e.Timestamp });
+                    entity.Property(e => e.Value).IsRequired();      // NVARCHAR(MAX) is fine
+                    entity.Property(e => e.Timestamp).IsRequired();  // anchor for this base
+
+                    // Optional, but useful for reads by time
+                    entity.HasIndex(e => new { e.TableName, e.EntityId, e.PropertyName, e.Timestamp })
+                          .HasDatabaseName("IX_TimeseriesBaseValue_Time");
+                    // NOTE: No ValueHash, no unique index — multiple bases per value are allowed by design.
                 });
 
                 modelBuilder.Entity<TimeseriesDelta>(entity =>
                 {
                     entity.ToTable("__sysTimeseriesDeltas");
                     entity.HasKey(e => e.Id);
+
                     entity.Property(e => e.BaseValueId).IsRequired();
-                    entity.Property(e => e.Deltas).IsRequired();
-                    entity.Property(e => e.LastTimestamp).IsRequired();
+                    entity.Property(e => e.Deltas).IsRequired().HasColumnType("varbinary(max)");
+                    entity.Property(e => e.LastTimestamp).IsRequired(); // int seconds from base
                     entity.Property(e => e.Version).IsRequired().IsConcurrencyToken();
+
                     entity.HasIndex(e => e.BaseValueId);
-                    entity.HasOne<TimeseriesBaseValue>().WithMany()
-                        .HasForeignKey(e => e.BaseValueId).OnDelete(DeleteBehavior.Cascade);
+                    entity.HasOne<TimeseriesBaseValue>()
+                          .WithMany()
+                          .HasForeignKey(e => e.BaseValueId)
+                          .OnDelete(DeleteBehavior.Cascade);
                 });
-                _logger?.LogInformation("Configured sysTimeseriesBaseValues and sysTimeseriesDeltas tables.");
             }
+
+
+
 
             if (_options.EnableChangeTracking)
             {
@@ -328,144 +339,6 @@ namespace SmartData.Data
             return results;
         }
 
-        public async Task<List<TimeseriesResult>> GetTimeseriesAsync(string tableName, string entityId, string propertyName, DateTime start, DateTime end)
-        {
-            if (!_options.EnableTimeseries)
-            {
-                _logger?.LogWarning("Timeseries feature is disabled.");
-                return new List<TimeseriesResult>();
-            }
-
-            var baseValues = await Set<TimeseriesBaseValue>()
-                .Where(b => b.TableName == tableName && b.EntityId == entityId && b.PropertyName == propertyName && b.Timestamp <= end)
-                .OrderBy(b => b.Timestamp)
-                .ToListAsync();
-
-            var results = new List<TimeseriesResult>();
-            foreach (var baseValue in baseValues)
-            {
-                var delta = await Set<TimeseriesDelta>()
-                    .FirstOrDefaultAsync(d => d.BaseValueId == baseValue.Id);
-                if (delta == null) continue;
-
-                var deltas = delta.GetDeltas();
-                int currentTime = 0;
-                foreach (var d in deltas)
-                {
-                    currentTime += d;
-                    var timestamp = baseValue.Timestamp.AddMilliseconds(currentTime);
-                    if (timestamp >= start && timestamp <= end)
-                        results.Add(new TimeseriesResult { Timestamp = timestamp, Value = baseValue.Value });
-                }
-            }
-            return results.OrderBy(r => r.Timestamp).ToList();
-        }
-
-        public async Task<List<TimeseriesResult>> GetInterpolatedTimeseriesAsync(
-            string tableName, string entityId, string propertyName, DateTime start, DateTime end,
-            TimeSpan interval, InterpolationMethod method)
-        {
-            if (!_options.EnableTimeseries)
-            {
-                _logger?.LogWarning("Timeseries feature is disabled.");
-                return new List<TimeseriesResult>();
-            }
-
-            var timeseries = await GetTimeseriesAsync(tableName, entityId, propertyName, start, end);
-            var result = new List<TimeseriesResult>();
-
-            if (!timeseries.Any()) return result;
-
-            for (var currentTime = start; currentTime <= end; currentTime = currentTime.Add(interval))
-            {
-                if (method == InterpolationMethod.None)
-                {
-                    var exactMatch = timeseries.FirstOrDefault(t => t.Timestamp == currentTime);
-                    if (exactMatch != null)
-                        result.Add(new TimeseriesResult { Timestamp = currentTime, Value = exactMatch.Value });
-                }
-                else
-                {
-                    double? value = null;
-                    var previous = timeseries.LastOrDefault(t => t.Timestamp <= currentTime);
-                    var next = timeseries.FirstOrDefault(t => t.Timestamp >= currentTime);
-
-                    if (previous == null && next == null) continue;
-
-                    switch (method)
-                    {
-                        case InterpolationMethod.Linear:
-                            if (previous != null && next != null)
-                            {
-                                if (double.TryParse(previous.Value, out var prevValue) && double.TryParse(next.Value, out var nextValue))
-                                {
-                                    var totalTime = (next.Timestamp - previous.Timestamp).TotalMilliseconds;
-                                    if (totalTime > 0)
-                                    {
-                                        var elapsed = (currentTime - previous.Timestamp).TotalMilliseconds;
-                                        var fraction = elapsed / totalTime;
-                                        value = prevValue + (nextValue - prevValue) * fraction;
-                                    }
-                                }
-                            }
-                            else if (previous != null)
-                            {
-                                if (double.TryParse(previous.Value, out var prevValue))
-                                    value = prevValue;
-                            }
-                            else if (next != null)
-                            {
-                                if (double.TryParse(next.Value, out var nextValue))
-                                    value = nextValue;
-                            }
-                            break;
-                        case InterpolationMethod.Nearest:
-                            if (previous != null && next != null)
-                            {
-                                var prevDiff = Math.Abs((currentTime - previous.Timestamp).TotalMilliseconds);
-                                var nextDiff = Math.Abs((currentTime - next.Timestamp).TotalMilliseconds);
-                                value = prevDiff <= nextDiff ? double.Parse(previous.Value) : double.Parse(next.Value);
-                            }
-                            else if (previous != null)
-                                value = double.Parse(previous.Value);
-                            else if (next != null)
-                                value = double.Parse(next.Value);
-                            break;
-                        case InterpolationMethod.Previous when previous != null:
-                            value = double.Parse(previous.Value);
-                            break;
-                        case InterpolationMethod.Next when next != null:
-                            value = double.Parse(next.Value);
-                            break;
-                    }
-
-                    if (value.HasValue)
-                        result.Add(new TimeseriesResult { Timestamp = currentTime, Value = value.Value.ToString("F2") });
-                }
-            }
-            return result;
-        }
-
-        private static byte[] FloatArrayToBytes(float[] floats)
-        {
-            if (floats == null) return Array.Empty<byte>();
-            using var stream = new MemoryStream(floats.Length * sizeof(float));
-            using var writer = new BinaryWriter(stream);
-            foreach (var f in floats) writer.Write(f);
-            return stream.ToArray();
-        }
-
-        private static float[] BytesToFloatArray(byte[] bytes)
-        {
-            if (bytes == null || bytes.Length == 0) return Array.Empty<float>();
-            if (bytes.Length % sizeof(float) != 0)
-                throw new ArgumentException("Byte array length must be a multiple of 4 for float array conversion.");
-            var floats = new float[bytes.Length / sizeof(float)];
-            using var stream = new MemoryStream(bytes);
-            using var reader = new BinaryReader(stream);
-            for (int i = 0; i < floats.Length; i++)
-                floats[i] = reader.ReadSingle();
-            return floats;
-        }
+        
     }
 }

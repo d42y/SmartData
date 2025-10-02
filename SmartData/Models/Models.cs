@@ -51,65 +51,6 @@ namespace SmartData.Models
         public DateTime Timestamp { get; set; }
     }
 
-    public class TimeseriesDelta
-    {
-        public Guid Id { get; set; }
-        public Guid BaseValueId { get; set; }
-        public byte[] Deltas { get; set; } = Array.Empty<byte>();
-        public int LastTimestamp { get; set; } = -1;
-        public int Version { get; set; } = 1;
-
-        public void AddTimestamp(int timestamp)
-        {
-            var deltas = GetDeltas();
-            deltas.Add(LastTimestamp == -1 ? 0 : timestamp - LastTimestamp);
-            LastTimestamp = timestamp;
-            Deltas = CompressDeltas(deltas);
-            Version++;
-        }
-
-        public List<int> GetDeltas()
-        {
-            if (Deltas == null || Deltas.Length == 0) return new List<int>();
-            using var stream = new MemoryStream(Deltas);
-            using var reader = new BinaryReader(stream);
-            var deltas = new List<int>();
-            while (stream.Position < stream.Length)
-            {
-                uint value = 0;
-                int shift = 0;
-                byte b;
-                do
-                {
-                    b = reader.ReadByte();
-                    value |= (uint)(b & 127) << shift;
-                    shift += 7;
-                } while ((b & 128) != 0 && stream.Position < stream.Length);
-                bool isNegative = reader.ReadBoolean();
-                deltas.Add(isNegative ? -(int)value : (int)value);
-            }
-            return deltas;
-        }
-
-        private byte[] CompressDeltas(List<int> deltas)
-        {
-            using var stream = new MemoryStream();
-            using var writer = new BinaryWriter(stream);
-            foreach (var delta in deltas)
-            {
-                uint value = (uint)Math.Abs(delta);
-                while (value >= 128)
-                {
-                    writer.Write((byte)(value & 127 | 128));
-                    value >>= 7;
-                }
-                writer.Write((byte)value);
-                writer.Write(delta < 0);
-            }
-            return stream.ToArray();
-        }
-    }
-
     public class IntegrityLogRecord
     {
         public Guid Id { get; set; }
@@ -183,4 +124,5 @@ namespace SmartData.Models
         public Dictionary<string, (object OldValue, object NewValue)> ChangedProperties { get; set; } // For updates
         public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     }
+
 }

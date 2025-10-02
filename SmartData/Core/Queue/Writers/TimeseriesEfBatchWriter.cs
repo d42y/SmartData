@@ -6,10 +6,6 @@ using SmartData.Models;
 
 namespace SmartData.Core.Queue.Writers
 {
-    /// <summary>
-    /// Batch writer for timeseries. Upserts base values and appends
-    /// deltas. Uses the existing TimeseriesDelta.AddTimestamp(int) API.
-    /// </summary>
     public sealed class TimeseriesEfBatchWriter
     {
         private readonly IServiceProvider _sp;
@@ -21,10 +17,10 @@ namespace SmartData.Core.Queue.Writers
         }
 
         public async Task WriteAsync(
-            IReadOnlyList<(string Table, string EntityId, string Property, string Value, DateTime BaseTimestamp, IReadOnlyList<DateTime> Deltas)> rows,
+            IReadOnlyList<(string Table, string EntityId, string Property, string Value, DateTime BaseTs, IReadOnlyList<DateTime> Deltas)> rows,
             CancellationToken ct)
         {
-            if (rows.Count == 0) return;
+            if (rows is null || rows.Count == 0) return;
 
             using var scope = _sp.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<DataContext>();
@@ -36,78 +32,83 @@ namespace SmartData.Core.Queue.Writers
             using var tx = await db.Database.BeginTransactionAsync(ct);
             try
             {
-                // Upsert base values (simple in-memory upsert via one fetch)
-                var baseKeys = rows
-                    .Select(r => (r.Table, r.EntityId, r.Property, r.Value))
-                    .Distinct()
+                // Coalesce to exactly one group per (T,E,P,V) for this batch
+                var groups = rows
+                    .GroupBy(r => new { r.Table, r.EntityId, r.Property, r.Value })
+                    .Select(g =>
+                    {
+                        var baseTs = g.Min(x => x.BaseTs);
+                        var all = g.SelectMany(x => x.Deltas)
+                                   .Append(baseTs)
+                                   .Distinct()
+                                   .OrderBy(t => t)
+                                   .ToList();
+                        return (
+                            Table: g.Key.Table,
+                            EntityId: g.Key.EntityId,
+                            Property: g.Key.Property,
+                            Value: g.Key.Value,
+                            BaseTs: all[0],
+                            AllTs: (IReadOnlyList<DateTime>)all
+                        );
+                    })
                     .ToList();
 
-                var existing = await db.Set<TimeseriesBaseValue>()
-                    .Where(b => baseKeys.Select(k => k.Table).Contains(b.TableName)
-                             && baseKeys.Select(k => k.EntityId).Contains(b.EntityId)
-                             && baseKeys.Select(k => k.Property).Contains(b.PropertyName)
-                             && baseKeys.Select(k => k.Value).Contains(b.Value))
-                    .ToListAsync(ct);
-
-                var baseMap = new Dictionary<(string Table, string Entity, string Prop, string Value), TimeseriesBaseValue>(
-                    capacity: existing.Count);
-
-                foreach (var b in existing)
-                    baseMap[(b.TableName, b.EntityId, b.PropertyName, b.Value)] = b;
-
-                var toInsert = new List<TimeseriesBaseValue>();
-                foreach (var bk in baseKeys)
+                foreach (var g in groups)
                 {
-                    if (!baseMap.TryGetValue((bk.Table, bk.EntityId, bk.Property, bk.Value), out var bv))
+                    // 1) ALWAYS create a new base anchored at this batch's earliest timestamp
+                    var baseRow = new TimeseriesBaseValue
                     {
-                        bv = new TimeseriesBaseValue
-                        {
-                            Id = Guid.NewGuid(),
-                            TableName = bk.Table,
-                            EntityId = bk.EntityId,
-                            PropertyName = bk.Property,
-                            Value = bk.Value,
-                            Timestamp = DateTime.UtcNow
-                        };
-                        baseMap[(bk.Table, bk.EntityId, bk.Property, bk.Value)] = bv;
-                        toInsert.Add(bv);
+                        Id = Guid.NewGuid(),
+                        TableName = g.Table,
+                        EntityId = g.EntityId,
+                        PropertyName = g.Property,
+                        Value = g.Value,
+                        Timestamp = g.BaseTs
+                    };
+
+                    db.Entry(baseRow).State = EntityState.Added;
+                    await db.SaveChangesAsync(ct);
+
+                    // 2) Build offsets relative to THIS base we just wrote
+                    static int ToSec(DateTime ts, DateTime baseTs)
+                        => (int)Math.Round((ts - baseTs).TotalSeconds, MidpointRounding.AwayFromZero);
+
+                    var offsets = g.AllTs
+                        .Where(ts => ts > g.BaseTs)
+                        .Select(ts => ToSec(ts, g.BaseTs))
+                        .OrderBy(off => off)
+                        .ToList();
+
+                    if (offsets.Count == 0)
+                    {
+                        _log.LogInformation("TS Writer: base {BaseId} created with no deltas (single point).", baseRow.Id);
+                        continue;
                     }
-                }
 
-                if (toInsert.Count > 0)
-                    await db.Set<TimeseriesBaseValue>().AddRangeAsync(toInsert, ct);
+                    var payload = PackOffsets(offsets);
 
-                // Build deltas. Your current API uses AddTimestamp(int), so we’ll
-                // keep the same (0) marker just like your original code.
-                var deltas = new List<TimeseriesDelta>(rows.Count);
-                foreach (var r in rows)
-                {
-                    var baseId = baseMap[(r.Table, r.EntityId, r.Property, r.Value)].Id;
                     var delta = new TimeseriesDelta
                     {
                         Id = Guid.NewGuid(),
-                        BaseValueId = baseId,
-                        Version = 1
+                        BaseValueId = baseRow.Id,
+                        Version = 1,
+                        Deltas = payload,       // Ensure column is VARBINARY(MAX)
+                        LastTimestamp = offsets[^1]    // seconds since base
                     };
 
-                    // Preserve your prior behavior: push a marker per incoming point
-                    // but use 0 so we don't call a non-existent DateTime overload.
-                    var count = r.Deltas?.Count ?? 0;
-                    for (int i = 0; i < count; i++)
-                        delta.AddTimestamp(0);
+                    db.Entry(delta).State = EntityState.Added;
+                    await db.SaveChangesAsync(ct);
 
-                    deltas.Add(delta);
+                    _log.LogInformation("TS Writer: base {BaseId} @ {BaseTs:o} -> delta {DeltaId} count={Count} bytes={Bytes} lastOff={Last}",
+                        baseRow.Id, g.BaseTs, delta.Id, offsets.Count, payload.Length, delta.LastTimestamp);
                 }
 
-                if (deltas.Count > 0)
-                    await db.Set<TimeseriesDelta>().AddRangeAsync(deltas, ct);
-
-                await db.SaveChangesAsync(ct);
                 await tx.CommitAsync(ct);
             }
             catch (Exception ex)
             {
-                _log.LogError(ex, "Timeseries batch failed ({Count})", rows.Count);
+                _log.LogError(ex, "Timeseries batch failed (rows={Count})", rows?.Count ?? 0);
                 await tx.RollbackAsync(ct);
                 throw;
             }
@@ -115,6 +116,15 @@ namespace SmartData.Core.Queue.Writers
             {
                 db.ChangeTracker.AutoDetectChangesEnabled = prevAuto;
             }
+        }
+
+        // 4-byte little-endian ints
+        private static byte[] PackOffsets(IReadOnlyList<int> offsets)
+        {
+            var buf = new byte[offsets.Count * 4];
+            for (int i = 0; i < offsets.Count; i++)
+                BitConverter.TryWriteBytes(new Span<byte>(buf, i * 4, 4), offsets[i]);
+            return buf;
         }
     }
 }

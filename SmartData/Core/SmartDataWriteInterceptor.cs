@@ -469,19 +469,19 @@ namespace SmartData.Core
                 : (Array.Empty<string>(), Array.Empty<object?>());
         }
 
-        private static bool HasEmbeddables(EntityEntry e)
-            => e.Entity.GetType().GetCustomAttribute<EmbeddableAttribute>() != null
-               || e.Entity.GetType().GetProperties().Any(p => p.GetCustomAttribute<EmbeddableAttribute>() != null);
+        //private static bool HasEmbeddables(EntityEntry e)
+        //    => e.Entity.GetType().GetCustomAttribute<EmbeddableAttribute>() != null
+        //       || e.Entity.GetType().GetProperties().Any(p => p.GetCustomAttribute<EmbeddableAttribute>() != null);
 
-        private static bool EmbeddablesModified(EntityEntry e)
-        {
-            var props = e.Entity.GetType().GetProperties()
-                .Where(p => p.GetCustomAttribute<EmbeddableAttribute>() != null)
-                .Select(p => p.Name)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        //private static bool EmbeddablesModified(EntityEntry e)
+        //{
+        //    var props = e.Entity.GetType().GetProperties()
+        //        .Where(p => p.GetCustomAttribute<EmbeddableAttribute>() != null)
+        //        .Select(p => p.Name)
+        //        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            return e.Properties.Any(p => props.Contains(p.Metadata.Name) && p.IsModified);
-        }
+        //    return e.Properties.Any(p => props.Contains(p.Metadata.Name) && p.IsModified);
+        //}
 
         private string ResolveChangedBy()
         {

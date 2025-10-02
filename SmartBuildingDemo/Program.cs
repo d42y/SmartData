@@ -66,7 +66,7 @@ public class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
             .WithTimeseries()
             .WithChangeTracking()
             .WithEmbeddings()
-            .WithCalculations();
+            .WithAnalytics();
 
         var dbContextOptionsBuilder = new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlServer(

@@ -11,6 +11,7 @@ using SmartData.Core.Queue.Strategies;
 using SmartData.Core.Queue.Writers;
 using SmartData.Data;
 using SmartData.Vectorizer;
+using SmartData.Core.Timeseries;
 
 namespace SmartData.Core
 {
@@ -94,7 +95,13 @@ namespace SmartData.Core
             }
             if (options.EnableTimeseries)
             {
-                services.AddSingleton<TimeseriesEfBatchWriter>();
+                // Timeseries ingest pipeline (always registered; activated only if EnableTimeseries)
+                services.AddSingleton(new TimeseriesIngestOptions());            // or bind from config
+                services.AddSingleton<ITimeseriesIngestQueue, TimeseriesIngestQueue>();
+                services.AddScoped<TimeseriesEfBatchWriter>();                   // uses DataContext inside scope
+                services.AddHostedService<TimeseriesIngestWorker>();             // bulk flusher
+
+
                 services.AddSingleton<TimeseriesStrategy>();
                 services.AddSingleton(sp =>
                 {
