@@ -5,7 +5,6 @@ namespace SmartData.Data
 {
     public partial class DataContext : DbContext
     {
- 
         /// <summary>
         /// Return paged change-log rows for a given entity with optional filters.
         /// </summary>
@@ -15,7 +14,7 @@ namespace SmartData.Data
                 return new ChangeLogPage(0, Array.Empty<ChangeLogRecord>());
 
             IQueryable<ChangeLogRecord> query = ChangeLogRecords.AsNoTracking()
-                .Where(x => x.TableName == q.TableName && x.EntityId == q.EntityId);
+                .Where(x => x.TableName == q.TableName && (x.EntityId == q.EntityId || x.EntityId.StartsWith($"{q.EntityId}|")));
 
             if (q.FromUtc is DateTime f) query = query.Where(x => x.ChangedAt >= f);
             if (q.ToUtc is DateTime t) query = query.Where(x => x.ChangedAt <= t);
@@ -54,7 +53,7 @@ namespace SmartData.Data
                 .Where(x => x.TableName == tableName);
 
             if (!string.IsNullOrWhiteSpace(entityId))
-                q = q.Where(x => x.EntityId == entityId);
+                q = q.Where(x => (x.EntityId == entityId || x.EntityId.StartsWith($"{entityId}|")));
             if (fromUtc is DateTime f)
                 q = q.Where(x => x.ChangedAt >= f);
             if (toUtc is DateTime t)
@@ -116,7 +115,7 @@ namespace SmartData.Data
                 .Where(x => x.TableName == tableName);
 
             if (!string.IsNullOrWhiteSpace(entityId))
-                q = q.Where(x => x.EntityId == entityId);
+                q = q.Where(x => (x.EntityId == entityId || x.EntityId.StartsWith($"{entityId}|")));
             if (!string.IsNullOrWhiteSpace(propertyName))
                 q = q.Where(x => x.PropertyName == propertyName);
 

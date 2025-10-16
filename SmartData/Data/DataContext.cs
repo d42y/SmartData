@@ -3,7 +3,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
-using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Microsoft.Extensions.Logging;
 using SmartData.Core;
